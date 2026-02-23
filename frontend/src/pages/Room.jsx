@@ -25,7 +25,6 @@ function Room() {
   const [uploadingImage, setUploadingImage] = useState(false)
   const [loadedImages, setLoadedImages] = useState({})
   const [selectedId, setSelectedId] = useState(null) // for glow on click
-  const [draggingId, setDraggingId] = useState(null) // track which image is being dragged
   const isDrawing = useRef(false)
   const stageRef = useRef(null)
   const inputRef = useRef(null)
@@ -194,7 +193,6 @@ function Room() {
         prev.map(el => el.id === elId ? { ...el, x: newX, y: newY } : el)
       )
     }
-    setDraggingId(null)
   }
 
   const handleKeyDown = (e) => {
@@ -294,7 +292,6 @@ function Room() {
           height={el.height}
           image={loadedImages[el.id]}
           draggable={true}
-          onDragStart={() => setDraggingId(el.id)}
           onDragEnd={(e) => handleImageDragEnd(el.id, e.target.x(), e.target.y(), isDraft)}
           {...glowProps}
         />
