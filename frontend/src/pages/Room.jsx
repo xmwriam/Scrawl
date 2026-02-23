@@ -307,6 +307,26 @@ function Room() {
   const handleKeyDown = (e) => {
     if (e.key === 'Enter') commitText()
     if (e.key === 'Escape') setTextInput(null)
+    if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId && !textInput) {
+      deleteElement(selectedId)
+    }
+  }
+
+  const deleteElement = (elementId) => {
+    // Try to delete from draft first
+    const draftIndex = draftElements.findIndex(el => el.id === elementId)
+    if (draftIndex !== -1) {
+      setDraftElements(prev => prev.filter((_, i) => i !== draftIndex))
+      setSelectedId(null)
+      return
+    }
+    
+    // Then try sent elements
+    const sentIndex = sentElements.findIndex(el => el.id === elementId)
+    if (sentIndex !== -1) {
+      setSentElements(prev => prev.filter((_, i) => i !== sentIndex))
+      setSelectedId(null)
+    }
   }
 
   const handleImageUpload = async (e) => {
@@ -588,6 +608,23 @@ function Room() {
               />
               <span>{brushSize}px</span>
             </div>
+            {selectedId && (
+              <button
+                onClick={() => deleteElement(selectedId)}
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: 6,
+                  border: 'none',
+                  background: '#ff6b6b',
+                  color: 'white',
+                  cursor: 'pointer',
+                  fontSize: 13,
+                  fontWeight: 500,
+                }}
+              >
+                delete
+              </button>
+            )}
           </>
         )}
 
