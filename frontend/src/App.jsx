@@ -8,12 +8,13 @@ function App() {
   const [stagePos, setStagePos] = useState({ x: 0, y: 0 })
   const [elements, setElements] = useState([])
   const [currentLine, setCurrentLine] = useState(null)
-  const [tool, setTool] = useState('draw') // 'draw' or 'text'
-  const [textInput, setTextInput] = useState(null) // { x, y, canvasX, canvasY }
+  const [tool, setTool] = useState('draw')
+  const [textInput, setTextInput] = useState(null)
   const isDrawing = useRef(false)
   const stageRef = useRef(null)
   const inputRef = useRef(null)
 
+  // Wheel scroll
   useEffect(() => {
     const handleWheel = (e) => {
       if (isDrawing.current) return
@@ -27,10 +28,21 @@ function App() {
     return () => window.removeEventListener('wheel', handleWheel)
   }, [])
 
-  // Focus the input whenever it appears
+  // Prevent context menu on canvas
+  useEffect(() => {
+    const container = stageRef.current?.container()
+    if (!container) return
+    const preventContextMenu = (e) => e.preventDefault()
+    container.addEventListener('contextmenu', preventContextMenu)
+    return () => container.removeEventListener('contextmenu', preventContextMenu)
+  }, [])
+
+  // Focus input when it appears, with delay to let canvas finish its click
   useEffect(() => {
     if (textInput && inputRef.current) {
-      inputRef.current.focus()
+      setTimeout(() => {
+        inputRef.current?.focus()
+      }, 50)
     }
   }, [textInput])
 
@@ -44,38 +56,35 @@ function App() {
   }
 
   const handleMouseDown = (e) => {
-  const isBackground =
-    e.target === e.target.getStage() || e.target.name() === 'background'
+    if (tool === 'text') {
+      const stage = stageRef.current
+      const pointerPos = stage.getPointerPosition()
+      const canvasPos = getPointerPosition()
+      setTextInput({
+        screenX: pointerPos.x,
+        screenY: pointerPos.y,
+        canvasX: canvasPos.x,
+        canvasY: canvasPos.y,
+      })
+      return
+    }
 
-  if (tool === 'text') {
-    console.log('text block reached')  // add this
-    const stage = stageRef.current
-    const pointerPos = stage.getPointerPosition()
-    console.log('pointerPos:', pointerPos)  // add this
-    const canvasPos = getPointerPosition()
-    console.log('textInput being set:', { screenX: pointerPos.x, screenY: pointerPos.y })  // add this
+    if (tool === 'draw') {
+      const isBackground =
+        e.target === e.target.getStage() || e.target.name() === 'background'
+      if (!isBackground) return
 
-    setTextInput({
-      screenX: pointerPos.x,
-      screenY: pointerPos.y,
-      canvasX: canvasPos.x,
-      canvasY: canvasPos.y,
-    })
-    return
+      isDrawing.current = true
+      const pos = getPointerPosition()
+      setCurrentLine({
+        id: Date.now().toString(),
+        type: 'drawing',
+        points: [pos.x, pos.y],
+        stroke: '#2c2c2c',
+        strokeWidth: 3,
+      })
+    }
   }
-  if (tool === 'draw') {
-    if (!isBackground) return
-    isDrawing.current = true
-    const pos = getPointerPosition()
-    setCurrentLine({
-      id: Date.now().toString(),
-      type: 'drawing',
-      points: [pos.x, pos.y],
-      stroke: '#2c2c2c',
-      strokeWidth: 3,
-    })
-  }
-}
 
   const handleMouseMove = () => {
     if (!isDrawing.current || !currentLine) return
@@ -171,7 +180,7 @@ function App() {
           onBlur={commitText}
           onKeyDown={handleKeyDown}
           style={{
-            position: 'fixed',
+            position: 'absolute',
             left: textInput.screenX,
             top: textInput.screenY,
             background: 'transparent',
