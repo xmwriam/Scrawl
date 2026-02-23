@@ -200,6 +200,43 @@ function Room() {
     }
   }
 
+  const handleElementDragEnd = (elId, deltaX, deltaY, isDraft) => {
+    if (isDraft) {
+      setDraftElements(prev =>
+        prev.map(el => {
+          if (el.id === elId) {
+            if (el.type === 'drawing') {
+              // Offset all points
+              return {
+                ...el,
+                points: el.points.map((p, i) => i % 2 === 0 ? p + deltaX : p + deltaY)
+              }
+            } else if (el.type === 'text') {
+              return { ...el, x: el.x + deltaX, y: el.y + deltaY }
+            }
+          }
+          return el
+        })
+      )
+    } else {
+      setSentElements(prev =>
+        prev.map(el => {
+          if (el.id === elId) {
+            if (el.type === 'drawing') {
+              return {
+                ...el,
+                points: el.points.map((p, i) => i % 2 === 0 ? p + deltaX : p + deltaY)
+              }
+            } else if (el.type === 'text') {
+              return { ...el, x: el.x + deltaX, y: el.y + deltaY }
+            }
+          }
+          return el
+        })
+      )
+    }
+  }
+
   const handleKeyDown = (e) => {
     if (e.key === 'Enter') commitText()
     if (e.key === 'Escape') setTextInput(null)
@@ -272,7 +309,7 @@ function Room() {
       onClick: () => setSelectedId(isSelected ? null : el.id),
       // draft elements are slightly faded so you know they're not sent yet
       opacity: isDraft ? 0.6 : 1,
-      draggable: false, // nothing is draggable — everything is locked
+      draggable: true,
     }
 
     if (el.type === 'drawing') {
@@ -285,6 +322,11 @@ function Room() {
           tension={0.5}
           lineCap="round"
           lineJoin="round"
+          onDragEnd={(e) => {
+            const offset = e.target.offset()
+            handleElementDragEnd(el.id, offset.x, offset.y, isDraft)
+            e.target.offset({ x: 0, y: 0 })
+          }}
           {...glowProps}
         />
       )
@@ -300,6 +342,7 @@ function Room() {
           fontSize={el.fontSize}
           fill={el.fill || '#2c2c2c'}
           fontFamily={el.fontFamily}
+          onDragEnd={(e) => handleElementDragEnd(el.id, e.target.x() - el.x, e.target.y() - el.y, isDraft)}
           {...glowProps}
         />
       )
