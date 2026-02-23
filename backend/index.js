@@ -321,8 +321,7 @@ io.on('connection', (socket) => {
 
       // If second user joined, notify both
       if (room.members.length === 2) {
-        socket.to(roomId).emit('partner-joined')
-        socket.emit('partner-joined')
+        io.to(roomId).emit('partner-joined')
       }
     } catch (err) {
       console.error('Join room error:', err)
@@ -360,9 +359,17 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     const roomId = socket.data.roomId
     if (!roomId || !rooms[roomId]) return
+    
     rooms[roomId].members = rooms[roomId].members.filter(id => id !== socket.id)
-    console.log(`${socket.id} left room ${roomId}`)
+    console.log(`${socket.id} left room ${roomId} (${rooms[roomId].members.length}/2)`)
+    
+    // Notify remaining partner
     socket.to(roomId).emit('partner-left')
+    
+    // Clean up empty rooms
+    if (rooms[roomId].members.length === 0) {
+      delete rooms[roomId]
+    }
   })
 })
 

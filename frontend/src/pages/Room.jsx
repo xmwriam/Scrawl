@@ -42,39 +42,53 @@ function Room() {
   const fileInputRef = useRef(null)
 
   useEffect(() => {
-    const setupSocket = async () => {
-      socketRef.current = io('http://localhost:3001')
-      const socket = socketRef.current
+    if (!roomId || !token) return
 
-      // Emit join with token
-      socket.emit('join-room', roomId, token)
+    const socket = io('http://localhost:3001')
+    socketRef.current = socket
 
-      // Load sent elements when joining
-      socket.on('canvas-state', (elements) => {
-        setSentElements(elements)
-      })
+    // Emit join with token
+    socket.emit('join-room', roomId, token)
 
-      // Partner sent their drafts — add to our sent elements
-      socket.on('elements-received', (elements) => {
-        setSentElements(prev => [...prev, ...elements])
-      })
+    // Load sent elements when joining
+    socket.on('canvas-state', (elements) => {
+      setSentElements(elements)
+    })
 
-      socket.on('room-full', () => setRejected(true))
-      socket.on('partner-joined', () => setPartnerOnline(true))
-      socket.on('partner-left', () => setPartnerOnline(false))
+    // Partner sent their drafts — add to our sent elements
+    socket.on('elements-received', (elements) => {
+      setSentElements(prev => [...prev, ...elements])
+    })
 
-      // Handle auth errors
-      socket.on('auth-error', (error) => {
-        console.error('Auth error:', error)
-        alert(error)
-        navigate('/')
-      })
+    socket.on('partner-joined', () => {
+      setPartnerOnline(true)
+    })
 
-      return () => { socket.disconnect() }
-    }
+    socket.on('partner-left', () => {
+      setPartnerOnline(false)
+    })
 
-    if (roomId && token) {
-      setupSocket()
+    // Handle auth errors
+    socket.on('auth-error', (error) => {
+      console.error('Auth error:', error)
+      alert(error)
+      navigate('/')
+    })
+
+    // Cleanup on disconnect
+    socket.on('disconnect', () => {
+      setPartnerOnline(false)
+    })
+
+    // Cleanup function
+    return () => {
+      socket.off('canvas-state')
+      socket.off('elements-received')
+      socket.off('partner-joined')
+      socket.off('partner-left')
+      socket.off('auth-error')
+      socket.off('disconnect')
+      socket.disconnect()
     }
   }, [roomId, token, navigate])
 
