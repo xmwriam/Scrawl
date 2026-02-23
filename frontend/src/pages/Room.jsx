@@ -1,4 +1,4 @@
-import { Stage, Layer, Rect, Line, Text } from 'react-konva'
+import { Stage, Layer, Rect, Line, Text, Image as KonvaImage } from 'react-konva'
 import { useRef, useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { io } from 'socket.io-client'
@@ -18,9 +18,12 @@ function Room() {
   const [textInput, setTextInput] = useState(null)
   const [rejected, setRejected] = useState(false)
   const [partnerOnline, setPartnerOnline] = useState(false)
+  const [uploadingImage, setUploadingImage] = useState(false)
+  const [loadedImages, setLoadedImages] = useState({})
   const isDrawing = useRef(false)
   const stageRef = useRef(null)
   const inputRef = useRef(null)
+  const fileInputRef = useRef(null)
 
   useEffect(() => {
     socketRef.current = io('http://localhost:3001')
@@ -40,17 +43,25 @@ function Room() {
       setOtherLine(line)
     })
 
-    socket.on('room-full', () => {
-      setRejected(true)
-    })
-
+    socket.on('room-full', () => setRejected(true))
     socket.on('partner-joined', () => setPartnerOnline(true))
     socket.on('partner-left', () => setPartnerOnline(false))
 
-    return () => {
-      socket.disconnect()
-    }
+    return () => { socket.disconnect() }
   }, [roomId])
+
+  // Load images into browser Image objects when elements change
+  useEffect(() => {
+    elements.forEach(el => {
+      if (el.type === 'image' && !loadedImages[el.id]) {
+        const img = new window.Image()
+        img.src = el.url
+        img.onload = () => {
+          setLoadedImages(prev => ({ ...prev, [el.id]: img }))
+        }
+      }
+    })
+  }, [elements])
 
   useEffect(() => {
     const handleWheel = (e) => {
@@ -83,6 +94,11 @@ function Room() {
       x: pointerPos.x - stagePos.x,
       y: pointerPos.y - stagePos.y
     }
+  }
+
+  const addElement = (element) => {
+    setElements(prev => [...prev, element])
+    socketRef.current.emit('add-element', { roomId, element })
   }
 
   const handleMouseDown = (e) => {
@@ -129,8 +145,7 @@ function Room() {
   const handleMouseUp = () => {
     if (!isDrawing.current || !currentLine) return
     isDrawing.current = false
-    setElements(prev => [...prev, currentLine])
-    socketRef.current.emit('add-element', { roomId, element: currentLine })
+    addElement(currentLine)
     setCurrentLine(null)
     setOtherLine(null)
   }
@@ -138,7 +153,7 @@ function Room() {
   const commitText = () => {
     const value = inputRef.current?.value?.trim()
     if (value && textInput) {
-      const newElement = {
+      addElement({
         id: Date.now().toString(),
         type: 'text',
         x: textInput.canvasX,
@@ -147,9 +162,7 @@ function Room() {
         fontSize: 18,
         fill: '#2c2c2c',
         fontFamily: 'Georgia, serif',
-      }
-      setElements(prev => [...prev, newElement])
-      socketRef.current.emit('add-element', { roomId, element: newElement })
+      })
     }
     setTextInput(null)
   }
@@ -159,9 +172,46 @@ function Room() {
     if (e.key === 'Escape') setTextInput(null)
   }
 
-  const copyLink = () => {
-    navigator.clipboard.writeText(window.location.href)
+  const handleImageUpload = async (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+
+    setUploadingImage(true)
+
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+
+      const response = await fetch('http://localhost:3001/upload', {
+        method: 'POST',
+        body: formData,
+      })
+
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error)
+
+      const centerX = (window.innerWidth / 2) - stagePos.x
+      const centerY = (window.innerHeight / 2) - stagePos.y
+
+      addElement({
+        id: Date.now().toString(),
+        type: 'image',
+        x: centerX - 200,
+        y: centerY - 150,
+        width: 400,
+        height: 300,
+        url: data.url,
+      })
+    } catch (err) {
+      console.error('Image upload failed:', err)
+      alert(`Upload failed: ${err.message}`)
+    } finally {
+      setUploadingImage(false)
+      fileInputRef.current.value = ''
+    }
   }
+
+  const copyLink = () => navigator.clipboard.writeText(window.location.href)
 
   const renderElement = (el) => {
     if (el.type === 'drawing') {
@@ -187,6 +237,18 @@ function Room() {
           fontSize={el.fontSize}
           fill={el.fill}
           fontFamily={el.fontFamily}
+        />
+      )
+    }
+    if (el.type === 'image' && loadedImages[el.id]) {
+      return (
+        <KonvaImage
+          key={el.id}
+          x={el.x}
+          y={el.y}
+          width={el.width}
+          height={el.height}
+          image={loadedImages[el.id]}
         />
       )
     }
@@ -274,6 +336,23 @@ function Room() {
         >
           T Text
         </button>
+        <button
+          onClick={() => fileInputRef.current.click()}
+          disabled={uploadingImage}
+          style={{
+            padding: '6px 16px',
+            borderRadius: 8,
+            border: 'none',
+            cursor: 'pointer',
+            background: '#f0f0f0',
+            color: '#2c2c2c',
+            fontWeight: 600,
+            fontSize: 14,
+            opacity: uploadingImage ? 0.6 : 1,
+          }}
+        >
+          {uploadingImage ? 'uploading...' : '🖼️ Image'}
+        </button>
 
         <div style={{ width: 1, height: 24, background: '#e0e0e0', margin: '0 4px' }} />
 
@@ -304,6 +383,15 @@ function Room() {
           🔗 share
         </button>
       </div>
+
+      {/* Hidden file input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: 'none' }}
+        onChange={handleImageUpload}
+      />
 
       {/* Floating text input */}
       {textInput && (

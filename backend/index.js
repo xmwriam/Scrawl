@@ -3,10 +3,14 @@ const express = require('express')
 const http = require('http')
 const { Server } = require('socket.io')
 const cors = require('cors')
+const multer = require('multer')
 const { createClient } = require('@supabase/supabase-js')
 
 const app = express()
 app.use(cors())
+app.use(express.json())
+
+const upload = multer({ storage: multer.memoryStorage() })
 
 const server = http.createServer(app)
 
@@ -17,13 +21,44 @@ const io = new Server(server, {
   }
 })
 
-// Supabase client
+// Regular client for database operations
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_KEY
 )
 
-const rooms = {} // in-memory: { roomId: { members: [] } }
+// Admin client for storage — bypasses RLS
+const supabaseAdmin = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_KEY
+)
+
+const rooms = {}
+
+// Image upload endpoint
+app.post('/upload', upload.single('file'), async (req, res) => {
+  try {
+    const file = req.file
+    const fileName = `${Date.now()}-${file.originalname}`
+
+    const { error } = await supabaseAdmin.storage
+      .from('images')
+      .upload(fileName, file.buffer, {
+        contentType: file.mimetype
+      })
+
+    if (error) throw error
+
+    const { data } = supabaseAdmin.storage
+      .from('images')
+      .getPublicUrl(fileName)
+
+    res.json({ url: data.publicUrl })
+  } catch (err) {
+    console.error('Upload error:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
 
 io.on('connection', (socket) => {
   console.log('connected:', socket.id)
@@ -48,7 +83,6 @@ io.on('connection', (socket) => {
 
     console.log(`${socket.id} joined room ${roomId} (${room.members.length}/2)`)
 
-    // Load canvas state from Supabase instead of memory
     const { data, error } = await supabase
       .from('elements')
       .select('*')
@@ -59,7 +93,6 @@ io.on('connection', (socket) => {
       console.error('Error loading canvas:', error)
       socket.emit('canvas-state', [])
     } else {
-      // Send just the element data (unwrap from database row)
       socket.emit('canvas-state', data.map(row => row.data))
     }
 
@@ -70,7 +103,6 @@ io.on('connection', (socket) => {
   })
 
   socket.on('add-element', async ({ roomId, element }) => {
-    // Save to Supabase
     const { error } = await supabase
       .from('elements')
       .insert({
@@ -84,7 +116,6 @@ io.on('connection', (socket) => {
       console.error('Error saving element:', error)
     }
 
-    // Forward to the other person
     socket.to(roomId).emit('element-added', element)
   })
 
