@@ -36,6 +36,7 @@ function Room() {
   const [uploadingImage, setUploadingImage] = useState(false)
   const [loadedImages, setLoadedImages] = useState({})
   const [selectedId, setSelectedId] = useState(null) // for glow on click
+  const [hoveredElementId, setHoveredElementId] = useState(null) // for timestamp on hover
   const isDrawing = useRef(false)
   const stageRef = useRef(null)
   const inputRef = useRef(null)
@@ -139,10 +140,42 @@ function Room() {
     }
   }
 
+  const formatTime = (createdAt) => {
+    if (!createdAt) return ''
+    const date = new Date(createdAt)
+    const today = new Date()
+    const yesterday = new Date(today)
+    yesterday.setDate(yesterday.getDate() - 1)
+    
+    const isToday = 
+      date.getFullYear() === today.getFullYear() &&
+      date.getMonth() === today.getMonth() &&
+      date.getDate() === today.getDate()
+    
+    const isYesterday =
+      date.getFullYear() === yesterday.getFullYear() &&
+      date.getMonth() === yesterday.getMonth() &&
+      date.getDate() === yesterday.getDate()
+    
+    const hours = String(date.getHours()).padStart(2, '0')
+    const minutes = String(date.getMinutes()).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    
+    if (isToday) {
+      return `Today ${hours}:${minutes}`
+    } else if (isYesterday) {
+      return `Yesterday ${hours}:${minutes}`
+    } else {
+      return `${day}/${month} ${hours}:${minutes}`
+    }
+  }
+
   // Add to draft — save to DB but don't tell partner yet
   const addDraft = (element) => {
-    setDraftElements(prev => [...prev, element])
-    socketRef.current.emit('save-draft', { roomId, element })
+    const elementWithTime = { ...element, createdAt: new Date().toISOString() }
+    setDraftElements(prev => [...prev, elementWithTime])
+    socketRef.current.emit('save-draft', { roomId, element: elementWithTime })
   }
 
   // Send all drafts to partner at once
@@ -336,6 +369,7 @@ function Room() {
 
   const renderElement = (el, isDraft = false) => {
     const isSelected = selectedId === el.id
+    const isHovered = hoveredElementId === el.id
     const glowProps = isSelected ? {
       shadowColor: '#f5a623',
       shadowBlur: 16,
@@ -349,10 +383,25 @@ function Room() {
       // draft elements are slightly faded so you know they're not sent yet
       opacity: isDraft ? 0.6 : 1,
       draggable: true,
+      onMouseEnter: () => setHoveredElementId(el.id),
+      onMouseLeave: () => setHoveredElementId(null),
     }
 
+    const timestampElement = isHovered && el.createdAt ? (
+      <Text
+        key={`timestamp-${el.id}`}
+        x={(el.x || el.points?.[0] || 0) + 10}
+        y={(el.y || el.points?.[1] || 0) - 30}
+        text={formatTime(el.createdAt)}
+        fontSize={12}
+        fill="#888"
+        fontFamily="Arial"
+        pointerEvents="none"
+      />
+    ) : null
+
     if (el.type === 'drawing') {
-      return (
+      return [
         <Line
           {...commonProps}
           points={el.points}
@@ -367,12 +416,13 @@ function Room() {
             e.target.offset({ x: 0, y: 0 })
           }}
           {...glowProps}
-        />
-      )
+        />,
+        timestampElement,
+      ].filter(Boolean)
     }
 
     if (el.type === 'text') {
-      return (
+      return [
         <Text
           {...commonProps}
           x={el.x}
@@ -383,12 +433,13 @@ function Room() {
           fontFamily={el.fontFamily}
           onDragEnd={(e) => handleElementDragEnd(el.id, e.target.x() - el.x, e.target.y() - el.y, isDraft)}
           {...glowProps}
-        />
-      )
+        />,
+        timestampElement,
+      ].filter(Boolean)
     }
 
     if (el.type === 'image' && loadedImages[el.id]) {
-      return (
+      return [
         <KonvaImage
           {...commonProps}
           x={el.x}
@@ -399,8 +450,9 @@ function Room() {
           draggable={true}
           onDragEnd={(e) => handleImageDragEnd(el.id, e.target.x(), e.target.y(), isDraft)}
           {...glowProps}
-        />
-      )
+        />,
+        timestampElement,
+      ].filter(Boolean)
     }
 
     return null
@@ -782,10 +834,10 @@ function Room() {
           />
 
           {/* Sent elements — fully opaque, locked forever */}
-          {sentElements.map(el => renderElement(el, false))}
+          {sentElements.map(el => renderElement(el, false)).flat()}
 
           {/* Draft elements — faded, only visible to you */}
-          {draftElements.map(el => renderElement(el, true))}
+          {draftElements.map(el => renderElement(el, true)).flat()}
 
           {/* Line currently being drawn */}
           {currentLine && (
