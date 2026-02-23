@@ -19,6 +19,11 @@ function Room() {
 
   const [currentLine, setCurrentLine] = useState(null)
   const [tool, setTool] = useState('draw')
+  const [drawColor, setDrawColor] = useState('#2c2c2c')
+  const [brushSize, setBrushSize] = useState(3)
+  const [textColor, setTextColor] = useState('#2c2c2c')
+  const [showColorPicker, setShowColorPicker] = useState(false)
+  const [showStickers, setShowStickers] = useState(false)
   const [textInput, setTextInput] = useState(null)
   const [rejected, setRejected] = useState(false)
   const [partnerOnline, setPartnerOnline] = useState(false)
@@ -144,8 +149,8 @@ function Room() {
         id: Date.now().toString(),
         type: 'drawing',
         points: [pos.x, pos.y],
-        stroke: '#2c2c2c',
-        strokeWidth: 3,
+        stroke: drawColor,
+        strokeWidth: brushSize,
       })
     }
   }
@@ -176,7 +181,7 @@ function Room() {
         y: textInput.canvasY,
         text: value,
         fontSize: 18,
-        fill: '#2c2c2c',
+        fill: textColor,
         fontFamily: 'Georgia, serif',
       })
     }
@@ -231,6 +236,24 @@ function Room() {
       setUploadingImage(false)
       fileInputRef.current.value = ''
     }
+  }
+
+  const stickers = ['😍', '🎉', '💕', '✨', '🌟', '😂', '🔥', '💯', '🎨', '📝', '💌', '🌹']
+
+  const addSticker = (emoji) => {
+    const centerX = (window.innerWidth / 2) - stagePos.x
+    const centerY = (window.innerHeight / 2) - stagePos.y
+    addDraft({
+      id: Date.now().toString(),
+      type: 'text',
+      x: centerX,
+      y: centerY,
+      text: emoji,
+      fontSize: 48,
+      fill: '#2c2c2c',
+      fontFamily: 'Arial',
+    })
+    setShowStickers(false)
   }
 
   const copyLink = () => navigator.clipboard.writeText(window.location.href)
@@ -351,6 +374,8 @@ function Room() {
         boxShadow: '0 2px 12px rgba(0,0,0,0.12)',
         zIndex: 100,
         alignItems: 'center',
+        flexWrap: 'wrap',
+        maxWidth: '90vw',
       }}>
         <button
           onClick={() => setTool('draw')}
@@ -367,6 +392,71 @@ function Room() {
         >
           ✏️ Draw
         </button>
+
+        {/* Draw Color & Size */}
+        {tool === 'draw' && (
+          <>
+            <div style={{ position: 'relative' }}>
+              <button
+                onClick={() => setShowColorPicker(!showColorPicker)}
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: 8,
+                  border: 'none',
+                  cursor: 'pointer',
+                  background: drawColor,
+                  width: 40,
+                  height: 40,
+                  boxShadow: '0 1px 4px rgba(0,0,0,0.1)',
+                }}
+                title="Draw color"
+              />
+              {showColorPicker && (
+                <div style={{
+                  position: 'absolute',
+                  top: 50,
+                  left: 0,
+                  background: 'white',
+                  borderRadius: 8,
+                  padding: 8,
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(4, 1fr)',
+                  gap: 6,
+                  zIndex: 200,
+                }}>
+                  {['#2c2c2c', '#ff6b6b', '#4ecdc4', '#ffe66d', '#ff006e', '#8e44ad', '#2e86ab', '#a23b72'].map(color => (
+                    <button
+                      key={color}
+                      onClick={() => { setDrawColor(color); setShowColorPicker(false); }}
+                      style={{
+                        width: 28,
+                        height: 28,
+                        borderRadius: 6,
+                        border: drawColor === color ? '3px solid #2c2c2c' : 'none',
+                        background: color,
+                        cursor: 'pointer',
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#666' }}>
+              Size: 
+              <input
+                type="range"
+                min="1"
+                max="15"
+                value={brushSize}
+                onChange={(e) => setBrushSize(Number(e.target.value))}
+                style={{ width: 80 }}
+              />
+              <span>{brushSize}px</span>
+            </div>
+          </>
+        )}
+
         <button
           onClick={() => setTool('text')}
           style={{
@@ -382,6 +472,57 @@ function Room() {
         >
           T Text
         </button>
+
+        {/* Text Color */}
+        {tool === 'text' && (
+          <div style={{ position: 'relative' }}>
+            <button
+              onClick={() => setShowColorPicker(!showColorPicker)}
+              style={{
+                padding: '6px 12px',
+                borderRadius: 8,
+                border: 'none',
+                cursor: 'pointer',
+                background: textColor,
+                width: 40,
+                height: 40,
+                boxShadow: '0 1px 4px rgba(0,0,0,0.1)',
+              }}
+              title="Text color"
+            />
+            {showColorPicker && (
+              <div style={{
+                position: 'absolute',
+                top: 50,
+                left: 0,
+                background: 'white',
+                borderRadius: 8,
+                padding: 8,
+                boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                display: 'grid',
+                gridTemplateColumns: 'repeat(4, 1fr)',
+                gap: 6,
+                zIndex: 200,
+              }}>
+                {['#2c2c2c', '#ff6b6b', '#4ecdc4', '#ffe66d', '#ff006e', '#8e44ad', '#2e86ab', '#a23b72'].map(color => (
+                  <button
+                    key={color}
+                    onClick={() => { setTextColor(color); setShowColorPicker(false); }}
+                    style={{
+                      width: 28,
+                      height: 28,
+                      borderRadius: 6,
+                      border: textColor === color ? '3px solid #2c2c2c' : 'none',
+                      background: color,
+                      cursor: 'pointer',
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         <button
           onClick={() => fileInputRef.current.click()}
           disabled={uploadingImage}
@@ -399,6 +540,59 @@ function Room() {
         >
           {uploadingImage ? 'uploading...' : '🖼️ Image'}
         </button>
+
+        {/* Stickers */}
+        <div style={{ position: 'relative' }}>
+          <button
+            onClick={() => setShowStickers(!showStickers)}
+            style={{
+              padding: '6px 16px',
+              borderRadius: 8,
+              border: 'none',
+              cursor: 'pointer',
+              background: '#f0f0f0',
+              color: '#2c2c2c',
+              fontWeight: 600,
+              fontSize: 14,
+            }}
+          >
+            ⭐ Sticker
+          </button>
+          {showStickers && (
+            <div style={{
+              position: 'absolute',
+              top: 50,
+              left: 0,
+              background: 'white',
+              borderRadius: 8,
+              padding: 8,
+              boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+              display: 'grid',
+              gridTemplateColumns: 'repeat(4, 1fr)',
+              gap: 6,
+              width: 160,
+              zIndex: 200,
+            }}>
+              {stickers.map((emoji, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => addSticker(emoji)}
+                  style={{
+                    fontSize: 24,
+                    border: 'none',
+                    background: '#f0f0f0',
+                    borderRadius: 6,
+                    cursor: 'pointer',
+                    padding: 8,
+                    transition: 'all 0.2s',
+                  }}
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
         <div style={{ width: 1, height: 24, background: '#e0e0e0', margin: '0 4px' }} />
 
