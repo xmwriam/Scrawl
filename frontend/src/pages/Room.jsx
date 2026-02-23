@@ -11,15 +11,20 @@ function Room() {
   const navigate = useNavigate()
   const socketRef = useRef(null)
   const [stagePos, setStagePos] = useState({ x: 0, y: 0 })
-  const [elements, setElements] = useState([])
+
+  // sentElements — locked forever, visible to both people
+  const [sentElements, setSentElements] = useState([])
+  // draftElements — only visible to you, not yet sent
+  const [draftElements, setDraftElements] = useState([])
+
   const [currentLine, setCurrentLine] = useState(null)
-  const [otherLine, setOtherLine] = useState(null)
   const [tool, setTool] = useState('draw')
   const [textInput, setTextInput] = useState(null)
   const [rejected, setRejected] = useState(false)
   const [partnerOnline, setPartnerOnline] = useState(false)
   const [uploadingImage, setUploadingImage] = useState(false)
   const [loadedImages, setLoadedImages] = useState({})
+  const [selectedId, setSelectedId] = useState(null) // for glow on click
   const isDrawing = useRef(false)
   const stageRef = useRef(null)
   const inputRef = useRef(null)
@@ -31,16 +36,14 @@ function Room() {
 
     socket.emit('join-room', roomId)
 
-    socket.on('canvas-state', (savedElements) => {
-      setElements(savedElements)
+    // Load sent elements when joining
+    socket.on('canvas-state', (elements) => {
+      setSentElements(elements)
     })
 
-    socket.on('element-added', (element) => {
-      setElements(prev => [...prev, element])
-    })
-
-    socket.on('drawing-in-progress', (line) => {
-      setOtherLine(line)
+    // Partner sent their drafts — add to our sent elements
+    socket.on('elements-received', (elements) => {
+      setSentElements(prev => [...prev, ...elements])
     })
 
     socket.on('room-full', () => setRejected(true))
@@ -50,9 +53,10 @@ function Room() {
     return () => { socket.disconnect() }
   }, [roomId])
 
-  // Load images into browser Image objects when elements change
+  // Load images whenever sent or draft elements change
   useEffect(() => {
-    elements.forEach(el => {
+    const allElements = [...sentElements, ...draftElements]
+    allElements.forEach(el => {
       if (el.type === 'image' && !loadedImages[el.id]) {
         const img = new window.Image()
         img.src = el.url
@@ -61,7 +65,7 @@ function Room() {
         }
       }
     })
-  }, [elements])
+  }, [sentElements, draftElements])
 
   useEffect(() => {
     const handleWheel = (e) => {
@@ -96,12 +100,29 @@ function Room() {
     }
   }
 
-  const addElement = (element) => {
-    setElements(prev => [...prev, element])
-    socketRef.current.emit('add-element', { roomId, element })
+  // Add to draft — save to DB but don't tell partner yet
+  const addDraft = (element) => {
+    setDraftElements(prev => [...prev, element])
+    socketRef.current.emit('save-draft', { roomId, element })
+  }
+
+  // Send all drafts to partner at once
+  const handleSend = () => {
+    if (draftElements.length === 0) return
+
+    // Move drafts to sent
+    setSentElements(prev => [...prev, ...draftElements])
+    socketRef.current.emit('send-drafts', { roomId, elements: draftElements })
+    setDraftElements([])
   }
 
   const handleMouseDown = (e) => {
+    // Clicking background deselects
+    const isBackground =
+      e.target === e.target.getStage() || e.target.name() === 'background'
+
+    if (isBackground) setSelectedId(null)
+
     if (tool === 'text') {
       const stage = stageRef.current
       const pointerPos = stage.getPointerPosition()
@@ -116,8 +137,6 @@ function Room() {
     }
 
     if (tool === 'draw') {
-      const isBackground =
-        e.target === e.target.getStage() || e.target.name() === 'background'
       if (!isBackground) return
       isDrawing.current = true
       const pos = getPointerPosition()
@@ -134,26 +153,23 @@ function Room() {
   const handleMouseMove = () => {
     if (!isDrawing.current || !currentLine) return
     const pos = getPointerPosition()
-    const updatedLine = {
-      ...currentLine,
-      points: [...currentLine.points, pos.x, pos.y]
-    }
-    setCurrentLine(updatedLine)
-    socketRef.current.emit('drawing-in-progress', { roomId, line: updatedLine })
+    setCurrentLine(prev => ({
+      ...prev,
+      points: [...prev.points, pos.x, pos.y]
+    }))
   }
 
   const handleMouseUp = () => {
     if (!isDrawing.current || !currentLine) return
     isDrawing.current = false
-    addElement(currentLine)
+    addDraft(currentLine)
     setCurrentLine(null)
-    setOtherLine(null)
   }
 
   const commitText = () => {
     const value = inputRef.current?.value?.trim()
     if (value && textInput) {
-      addElement({
+      addDraft({
         id: Date.now().toString(),
         type: 'text',
         x: textInput.canvasX,
@@ -175,25 +191,19 @@ function Room() {
   const handleImageUpload = async (e) => {
     const file = e.target.files[0]
     if (!file) return
-
     setUploadingImage(true)
-
     try {
       const formData = new FormData()
       formData.append('file', file)
-
       const response = await fetch('http://localhost:3001/upload', {
         method: 'POST',
         body: formData,
       })
-
       const data = await response.json()
       if (!response.ok) throw new Error(data.error)
-
       const centerX = (window.innerWidth / 2) - stagePos.x
       const centerY = (window.innerHeight / 2) - stagePos.y
-
-      addElement({
+      addDraft({
         id: Date.now().toString(),
         type: 'image',
         x: centerX - 200,
@@ -213,45 +223,67 @@ function Room() {
 
   const copyLink = () => navigator.clipboard.writeText(window.location.href)
 
-  const renderElement = (el) => {
+  const renderElement = (el, isDraft = false) => {
+    const isSelected = selectedId === el.id
+    const glowProps = isSelected ? {
+      shadowColor: '#f5a623',
+      shadowBlur: 16,
+      shadowOpacity: 0.9,
+    } : {}
+
+    const commonProps = {
+      key: el.id,
+      // clicking selects the element to show glow
+      onClick: () => setSelectedId(isSelected ? null : el.id),
+      // draft elements are slightly faded so you know they're not sent yet
+      opacity: isDraft ? 0.6 : 1,
+      draggable: false, // nothing is draggable — everything is locked
+    }
+
     if (el.type === 'drawing') {
       return (
         <Line
-          key={el.id}
+          {...commonProps}
           points={el.points}
-          stroke={el.stroke}
+          stroke={el.stroke || '#2c2c2c'}
           strokeWidth={el.strokeWidth}
           tension={0.5}
           lineCap="round"
           lineJoin="round"
+          {...glowProps}
         />
       )
     }
+
     if (el.type === 'text') {
       return (
         <Text
-          key={el.id}
+          {...commonProps}
           x={el.x}
           y={el.y}
           text={el.text}
           fontSize={el.fontSize}
-          fill={el.fill}
+          fill={el.fill || '#2c2c2c'}
           fontFamily={el.fontFamily}
+          {...glowProps}
         />
       )
     }
+
     if (el.type === 'image' && loadedImages[el.id]) {
       return (
         <KonvaImage
-          key={el.id}
+          {...commonProps}
           x={el.x}
           y={el.y}
           width={el.width}
           height={el.height}
           image={loadedImages[el.id]}
+          {...glowProps}
         />
       )
     }
+
     return null
   }
 
@@ -382,6 +414,27 @@ function Room() {
         >
           🔗 share
         </button>
+
+        <div style={{ width: 1, height: 24, background: '#e0e0e0', margin: '0 4px' }} />
+
+        {/* Send button */}
+        <button
+          onClick={handleSend}
+          disabled={draftElements.length === 0}
+          style={{
+            padding: '6px 20px',
+            borderRadius: 8,
+            border: 'none',
+            cursor: draftElements.length === 0 ? 'default' : 'pointer',
+            background: draftElements.length === 0 ? '#f0f0f0' : '#2c2c2c',
+            color: draftElements.length === 0 ? '#aaa' : 'white',
+            fontWeight: 700,
+            fontSize: 14,
+            transition: 'all 0.2s',
+          }}
+        >
+          send {draftElements.length > 0 ? `(${draftElements.length})` : ''}
+        </button>
       </div>
 
       {/* Hidden file input */}
@@ -435,22 +488,19 @@ function Room() {
             height={CANVAS_HEIGHT}
             fill="#faf9f6"
           />
-          {elements.map(el => renderElement(el))}
+
+          {/* Sent elements — fully opaque, locked forever */}
+          {sentElements.map(el => renderElement(el, false))}
+
+          {/* Draft elements — faded, only visible to you */}
+          {draftElements.map(el => renderElement(el, true))}
+
+          {/* Line currently being drawn */}
           {currentLine && (
             <Line
               points={currentLine.points}
               stroke={currentLine.stroke}
               strokeWidth={currentLine.strokeWidth}
-              tension={0.5}
-              lineCap="round"
-              lineJoin="round"
-            />
-          )}
-          {otherLine && (
-            <Line
-              points={otherLine.points}
-              stroke="#e07a5f"
-              strokeWidth={otherLine.strokeWidth}
               tension={0.5}
               lineCap="round"
               lineJoin="round"

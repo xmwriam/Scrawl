@@ -11,7 +11,6 @@ app.use(cors())
 app.use(express.json())
 
 const upload = multer({ storage: multer.memoryStorage() })
-
 const server = http.createServer(app)
 
 const io = new Server(server, {
@@ -21,13 +20,11 @@ const io = new Server(server, {
   }
 })
 
-// Regular client for database operations
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_KEY
 )
 
-// Admin client for storage — bypasses RLS
 const supabaseAdmin = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
@@ -35,7 +32,6 @@ const supabaseAdmin = createClient(
 
 const rooms = {}
 
-// Image upload endpoint
 app.post('/upload', upload.single('file'), async (req, res) => {
   try {
     const file = req.file
@@ -43,9 +39,7 @@ app.post('/upload', upload.single('file'), async (req, res) => {
 
     const { error } = await supabaseAdmin.storage
       .from('images')
-      .upload(fileName, file.buffer, {
-        contentType: file.mimetype
-      })
+      .upload(fileName, file.buffer, { contentType: file.mimetype })
 
     if (error) throw error
 
@@ -83,10 +77,12 @@ io.on('connection', (socket) => {
 
     console.log(`${socket.id} joined room ${roomId} (${room.members.length}/2)`)
 
+    // Load only SENT elements from the database
     const { data, error } = await supabase
       .from('elements')
       .select('*')
       .eq('room_id', roomId)
+      .eq('sent', true) // only load committed elements
       .order('created_at', { ascending: true })
 
     if (error) {
@@ -102,25 +98,31 @@ io.on('connection', (socket) => {
     }
   })
 
-  socket.on('add-element', async ({ roomId, element }) => {
-    const { error } = await supabase
+  // Save draft element to DB (not sent yet — only visible to sender)
+  socket.on('save-draft', async ({ roomId, element }) => {
+    await supabase
       .from('elements')
       .insert({
         id: element.id,
         room_id: roomId,
         type: element.type,
         data: element,
+        sent: false, // draft, not yet sent
       })
-
-    if (error) {
-      console.error('Error saving element:', error)
-    }
-
-    socket.to(roomId).emit('element-added', element)
   })
 
-  socket.on('drawing-in-progress', ({ roomId, line }) => {
-    socket.to(roomId).emit('drawing-in-progress', line)
+  // Send all drafts — mark them as sent and broadcast to partner
+  socket.on('send-drafts', async ({ roomId, elements }) => {
+    // Mark all these elements as sent in DB
+    const ids = elements.map(el => el.id)
+
+    await supabase
+      .from('elements')
+      .update({ sent: true })
+      .in('id', ids)
+
+    // Broadcast all sent elements to partner at once
+    socket.to(roomId).emit('elements-received', elements)
   })
 
   socket.on('disconnect', () => {
