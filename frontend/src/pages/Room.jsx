@@ -1,15 +1,21 @@
 import { Stage, Layer, Rect, Line, Text, Image as KonvaImage } from 'react-konva'
-import { useRef, useState, useEffect } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useRef, useState, useEffect, useContext } from 'react'
+import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { io } from 'socket.io-client'
+import { AuthContext } from '../context/AuthContext'
 
 const CANVAS_WIDTH = window.innerWidth
 const CANVAS_HEIGHT = 10000
 
 function Room() {
-  const { roomId } = useParams()
+  const { roomId: paramRoomId } = useParams()
   const navigate = useNavigate()
+  const location = useLocation()
+  const { token } = useContext(AuthContext)
   const socketRef = useRef(null)
+  const [roomId, setRoomId] = useState(paramRoomId)
+  const [roomCode, setRoomCode] = useState(location.state?.roomCode || '')
+  const [showShareModal, setShowShareModal] = useState(false)
   const [stagePos, setStagePos] = useState({ x: 0, y: 0 })
 
   // sentElements — locked forever, visible to both people
@@ -36,27 +42,41 @@ function Room() {
   const fileInputRef = useRef(null)
 
   useEffect(() => {
-    socketRef.current = io('http://localhost:3001')
-    const socket = socketRef.current
+    const setupSocket = async () => {
+      socketRef.current = io('http://localhost:3001')
+      const socket = socketRef.current
 
-    socket.emit('join-room', roomId)
+      // Emit join with token
+      socket.emit('join-room', roomId, token)
 
-    // Load sent elements when joining
-    socket.on('canvas-state', (elements) => {
-      setSentElements(elements)
-    })
+      // Load sent elements when joining
+      socket.on('canvas-state', (elements) => {
+        setSentElements(elements)
+      })
 
-    // Partner sent their drafts — add to our sent elements
-    socket.on('elements-received', (elements) => {
-      setSentElements(prev => [...prev, ...elements])
-    })
+      // Partner sent their drafts — add to our sent elements
+      socket.on('elements-received', (elements) => {
+        setSentElements(prev => [...prev, ...elements])
+      })
 
-    socket.on('room-full', () => setRejected(true))
-    socket.on('partner-joined', () => setPartnerOnline(true))
-    socket.on('partner-left', () => setPartnerOnline(false))
+      socket.on('room-full', () => setRejected(true))
+      socket.on('partner-joined', () => setPartnerOnline(true))
+      socket.on('partner-left', () => setPartnerOnline(false))
 
-    return () => { socket.disconnect() }
-  }, [roomId])
+      // Handle auth errors
+      socket.on('auth-error', (error) => {
+        console.error('Auth error:', error)
+        alert(error)
+        navigate('/')
+      })
+
+      return () => { socket.disconnect() }
+    }
+
+    if (roomId && token) {
+      setupSocket()
+    }
+  }, [roomId, token, navigate])
 
   // Load images whenever sent or draft elements change
   useEffect(() => {
@@ -293,7 +313,12 @@ function Room() {
     setShowStickers(false)
   }
 
-  const copyLink = () => navigator.clipboard.writeText(window.location.href)
+  const copyRoomCode = () => {
+    if (roomCode) {
+      navigator.clipboard.writeText(roomCode)
+      alert('Room code copied: ' + roomCode)
+    }
+  }
 
   const renderElement = (el, isDraft = false) => {
     const isSelected = selectedId === el.id
@@ -652,15 +677,17 @@ function Room() {
         <div style={{ width: 1, height: 24, background: '#e0e0e0', margin: '0 4px' }} />
 
         <button
-          onClick={copyLink}
+          onClick={copyRoomCode}
+          disabled={!roomCode}
           style={{
             padding: '6px 14px',
             borderRadius: 8,
             border: 'none',
-            cursor: 'pointer',
+            cursor: roomCode ? 'pointer' : 'not-allowed',
             background: '#f0f0f0',
             color: '#2c2c2c',
             fontSize: 13,
+            opacity: roomCode ? 1 : 0.5,
           }}
         >
           🔗 share

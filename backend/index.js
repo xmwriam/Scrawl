@@ -156,47 +156,177 @@ const verifyToken = (req, res, next) => {
   }
 }
 
+// Create new room
+app.post('/rooms/create', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.userId
+
+    // Generate unique room code
+    let roomCode
+    let roomExists = true
+    while (roomExists) {
+      roomCode = Math.random().toString(36).substring(2, 8).toUpperCase()
+      const { data } = await supabase
+        .from('rooms')
+        .select('id')
+        .eq('room_code', roomCode)
+        .single()
+      roomExists = !!data
+    }
+
+    // Create room
+    const { data: room, error } = await supabase
+      .from('rooms')
+      .insert({ room_code: roomCode, owner_id: userId })
+      .select()
+      .single()
+
+    if (error) throw error
+
+    // Add owner to room_members
+    await supabase
+      .from('room_members')
+      .insert({ room_id: room.id, user_id: userId })
+
+    res.json({ roomId: room.id, roomCode: room.room_code })
+  } catch (err) {
+    console.error('Create room error:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Join existing room
+app.post('/rooms/join', verifyToken, async (req, res) => {
+  try {
+    const { roomCode } = req.body
+    const userId = req.user.userId
+
+    if (!roomCode) return res.status(400).json({ error: 'Room code required' })
+
+    // Find room by code
+    const { data: room, error } = await supabase
+      .from('rooms')
+      .select('*')
+      .eq('room_code', roomCode.toUpperCase())
+      .single()
+
+    if (error || !room) {
+      return res.status(404).json({ error: 'Room not found' })
+    }
+
+    // Check if room already has 2 members (1-on-1)
+    const { data: members, error: memberError } = await supabase
+      .from('room_members')
+      .select('id')
+      .eq('room_id', room.id)
+
+    if (memberError) throw memberError
+
+    if (members.length >= 2) {
+      return res.status(400).json({ error: 'Room is full (max 2 members)' })
+    }
+
+    // Check if user already in room
+    const { data: existing } = await supabase
+      .from('room_members')
+      .select('id')
+      .eq('room_id', room.id)
+      .eq('user_id', userId)
+      .single()
+
+    if (existing) {
+      return res.status(400).json({ error: 'Already joined this room' })
+    }
+
+    // Add user to room_members
+    const { error: joinError } = await supabase
+      .from('room_members')
+      .insert({ room_id: room.id, user_id: userId })
+
+    if (joinError) throw joinError
+
+    res.json({ roomId: room.id, roomCode: room.room_code })
+  } catch (err) {
+    console.error('Join room error:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
 io.on('connection', (socket) => {
   console.log('connected:', socket.id)
 
-  socket.on('join-room', async (roomId) => {
-    if (!rooms[roomId]) {
-      rooms[roomId] = { members: [] }
-    }
+  socket.on('join-room', async (roomId, token) => {
+    try {
+      // Verify JWT token
+      if (!token) {
+        socket.emit('auth-error', 'Token required')
+        return
+      }
 
-    const room = rooms[roomId]
+      let userId
+      try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET)
+        userId = decoded.userId
+      } catch (err) {
+        socket.emit('auth-error', 'Invalid token')
+        return
+      }
 
-    if (room.members.includes(socket.id)) return
+      // Verify user is a member of this room
+      const { data: membership, error: memberError } = await supabase
+        .from('room_members')
+        .select('*')
+        .eq('room_id', roomId)
+        .eq('user_id', userId)
+        .single()
 
-    if (room.members.length >= 2) {
-      socket.emit('room-full')
-      return
-    }
+      if (memberError || !membership) {
+        socket.emit('auth-error', 'Not a member of this room')
+        return
+      }
 
-    room.members.push(socket.id)
-    socket.join(roomId)
-    socket.data.roomId = roomId
+      // Initialize room tracking if needed
+      if (!rooms[roomId]) {
+        rooms[roomId] = { members: [], users: {} }
+      }
 
-    console.log(`${socket.id} joined room ${roomId} (${room.members.length}/2)`)
+      const room = rooms[roomId]
 
-    // Load only SENT elements from the database
-    const { data, error } = await supabase
-      .from('elements')
-      .select('*')
-      .eq('room_id', roomId)
-      .eq('sent', true) // only load committed elements
-      .order('created_at', { ascending: true })
+      // If socket already connected, skip
+      if (room.members.includes(socket.id)) return
 
-    if (error) {
-      console.error('Error loading canvas:', error)
-      socket.emit('canvas-state', [])
-    } else {
-      socket.emit('canvas-state', data.map(row => row.data))
-    }
+      // Add socket to room tracking
+      room.members.push(socket.id)
+      room.users[socket.id] = userId
+      socket.join(roomId)
+      socket.data.roomId = roomId
+      socket.data.userId = userId
 
-    if (room.members.length === 2) {
-      socket.to(roomId).emit('partner-joined')
-      socket.emit('partner-joined')
+      console.log(`${socket.id} joined room ${roomId} (${room.members.length}/2)`)
+
+      // Load only SENT elements from the database
+      const { data, error } = await supabase
+        .from('elements')
+        .select('*')
+        .eq('room_id', roomId)
+        .eq('sent', true) // only load committed elements
+        .order('created_at', { ascending: true })
+
+      if (error) {
+        console.error('Error loading canvas:', error)
+        socket.emit('canvas-state', [])
+      } else {
+        socket.emit('canvas-state', data.map(row => row.data))
+      }
+
+      // If second user joined, notify both
+      if (room.members.length === 2) {
+        socket.to(roomId).emit('partner-joined')
+        socket.emit('partner-joined')
+      }
+    } catch (err) {
+      console.error('Join room error:', err)
+      socket.emit('auth-error', err.message)
     }
   })
 
