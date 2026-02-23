@@ -10,47 +10,62 @@ const server = http.createServer(app)
 
 const io = new Server(server, {
   cors: {
-    origin: 'http://localhost:5173', // your React app's address
+    origin: 'http://localhost:5173',
     methods: ['GET', 'POST']
   }
 })
 
-// Each room stores its elements here (in memory for now)
 const rooms = {}
 
 io.on('connection', (socket) => {
-  console.log('a user connected:', socket.id)
+  console.log('connected:', socket.id)
 
-  // User joins a room
   socket.on('join-room', (roomId) => {
-    socket.join(roomId)
-    console.log(`${socket.id} joined room ${roomId}`)
+    if (!rooms[roomId]) {
+      rooms[roomId] = { members: [], elements: [] }
+    }
 
-    // Send them everything already on the canvas
-    if (rooms[roomId]) {
-      socket.emit('canvas-state', rooms[roomId])
-    } else {
-      rooms[roomId] = []
+    const room = rooms[roomId]
+
+    // Don't count the same socket twice
+    if (room.members.includes(socket.id)) return
+
+    // Block if full
+    if (room.members.length >= 2) {
+      socket.emit('room-full')
+      return
+    }
+
+    room.members.push(socket.id)
+    socket.join(roomId)
+    socket.data.roomId = roomId
+
+    console.log(`${socket.id} joined room ${roomId} (${room.members.length}/2)`)
+
+    socket.emit('canvas-state', room.elements)
+
+    if (room.members.length === 2) {
+      socket.to(roomId).emit('partner-joined')
+      socket.emit('partner-joined') // tell the first person too
     }
   })
 
-  // User added a new element (text or drawing)
   socket.on('add-element', ({ roomId, element }) => {
-    if (!rooms[roomId]) rooms[roomId] = []
-    rooms[roomId].push(element)
-
-    // Forward to everyone else in the room
+    if (!rooms[roomId]) return
+    rooms[roomId].elements.push(element)
     socket.to(roomId).emit('element-added', element)
   })
 
-  // User is currently drawing (in-progress line)
   socket.on('drawing-in-progress', ({ roomId, line }) => {
-    // Forward to everyone else — don't save, it's not committed yet
     socket.to(roomId).emit('drawing-in-progress', line)
   })
 
   socket.on('disconnect', () => {
-    console.log('user disconnected:', socket.id)
+    const roomId = socket.data.roomId
+    if (!roomId || !rooms[roomId]) return
+    rooms[roomId].members = rooms[roomId].members.filter(id => id !== socket.id)
+    console.log(`${socket.id} left room ${roomId}`)
+    socket.to(roomId).emit('partner-left')
   })
 })
 
