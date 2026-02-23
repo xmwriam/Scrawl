@@ -4,6 +4,8 @@ const http = require('http')
 const { Server } = require('socket.io')
 const cors = require('cors')
 const multer = require('multer')
+const jwt = require('jsonwebtoken')
+const bcrypt = require('bcrypt')
 const { createClient } = require('@supabase/supabase-js')
 
 const app = express()
@@ -30,6 +32,8 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_KEY
 )
 
+const SALT_ROUNDS = 10
+
 const rooms = {}
 
 app.post('/upload', upload.single('file'), async (req, res) => {
@@ -53,6 +57,104 @@ app.post('/upload', upload.single('file'), async (req, res) => {
     res.status(500).json({ error: err.message })
   }
 })
+
+// User Signup
+app.post('/auth/signup', async (req, res) => {
+  try {
+    const { email, password } = req.body
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password required' })
+    }
+
+    // Check if user already exists
+    const { data: existing } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', email)
+      .single()
+
+    if (existing) {
+      return res.status(400).json({ error: 'Email already registered' })
+    }
+
+    // Hash password
+    const passwordHash = await bcrypt.hash(password, SALT_ROUNDS)
+
+    // Create user
+    const { data: user, error } = await supabase
+      .from('users')
+      .insert({ email, password_hash: passwordHash })
+      .select()
+      .single()
+
+    if (error) throw error
+
+    // Generate JWT token
+    const token = jwt.sign(
+      { userId: user.id, email: user.email },
+      process.env.JWT_SECRET,
+      { expiresIn: '30d' }
+    )
+
+    res.json({ token, userId: user.id, email: user.email })
+  } catch (err) {
+    console.error('Signup error:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// User Login
+app.post('/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password required' })
+    }
+
+    // Find user
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', email)
+      .single()
+
+    if (error || !user) {
+      return res.status(401).json({ error: 'Invalid email or password' })
+    }
+
+    // Check password
+    const isValid = await bcrypt.compare(password, user.password_hash)
+    if (!isValid) {
+      return res.status(401).json({ error: 'Invalid email or password' })
+    }
+
+    // Generate JWT token
+    const token = jwt.sign(
+      { userId: user.id, email: user.email },
+      process.env.JWT_SECRET,
+      { expiresIn: '30d' }
+    )
+
+    res.json({ token, userId: user.id, email: user.email })
+  } catch (err) {
+    console.error('Login error:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Middleware to verify JWT
+const verifyToken = (req, res, next) => {
+  const token = req.headers.authorization?.split(' ')[1]
+  if (!token) return res.status(401).json({ error: 'Token required' })
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET)
+    req.user = decoded
+    next()
+  } catch (err) {
+    res.status(401).json({ error: 'Invalid token' })
+  }
+}
 
 io.on('connection', (socket) => {
   console.log('connected:', socket.id)
