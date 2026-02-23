@@ -1,18 +1,50 @@
 import { Stage, Layer, Rect, Line, Text } from 'react-konva'
 import { useRef, useState, useEffect } from 'react'
+import { io } from 'socket.io-client'
 
 const CANVAS_WIDTH = window.innerWidth
 const CANVAS_HEIGHT = 10000
+const ROOM_ID = 'test-room' // hardcoded for now, we'll make this dynamic later
+
+// Connect to our backend server
+const socket = io('http://localhost:3001')
 
 function App() {
   const [stagePos, setStagePos] = useState({ x: 0, y: 0 })
   const [elements, setElements] = useState([])
   const [currentLine, setCurrentLine] = useState(null)
+  const [otherLine, setOtherLine] = useState(null) // the other person's in-progress line
   const [tool, setTool] = useState('draw')
   const [textInput, setTextInput] = useState(null)
   const isDrawing = useRef(false)
   const stageRef = useRef(null)
   const inputRef = useRef(null)
+
+  // Join room and set up socket listeners
+  useEffect(() => {
+    socket.emit('join-room', ROOM_ID)
+
+    // Server sends us the full canvas when we join
+    socket.on('canvas-state', (savedElements) => {
+      setElements(savedElements)
+    })
+
+    // Someone else added an element
+    socket.on('element-added', (element) => {
+      setElements(prev => [...prev, element])
+    })
+
+    // Someone else is drawing right now
+    socket.on('drawing-in-progress', (line) => {
+      setOtherLine(line)
+    })
+
+    return () => {
+      socket.off('canvas-state')
+      socket.off('element-added')
+      socket.off('drawing-in-progress')
+    }
+  }, [])
 
   // Wheel scroll
   useEffect(() => {
@@ -28,7 +60,7 @@ function App() {
     return () => window.removeEventListener('wheel', handleWheel)
   }, [])
 
-  // Prevent context menu on canvas
+  // Prevent context menu
   useEffect(() => {
     const container = stageRef.current?.container()
     if (!container) return
@@ -37,7 +69,7 @@ function App() {
     return () => container.removeEventListener('contextmenu', preventContextMenu)
   }, [])
 
-  // Focus input when it appears, with delay to let canvas finish its click
+  // Focus text input
   useEffect(() => {
     if (textInput && inputRef.current) {
       setTimeout(() => {
@@ -89,23 +121,36 @@ function App() {
   const handleMouseMove = () => {
     if (!isDrawing.current || !currentLine) return
     const pos = getPointerPosition()
-    setCurrentLine(prev => ({
-      ...prev,
-      points: [...prev.points, pos.x, pos.y]
-    }))
+
+    const updatedLine = {
+      ...currentLine,
+      points: [...currentLine.points, pos.x, pos.y]
+    }
+
+    setCurrentLine(updatedLine)
+
+    // Broadcast in-progress line to the other person
+    socket.emit('drawing-in-progress', { roomId: ROOM_ID, line: updatedLine })
   }
 
   const handleMouseUp = () => {
     if (!isDrawing.current || !currentLine) return
     isDrawing.current = false
+
+    // Commit the line
     setElements(prev => [...prev, currentLine])
+
+    // Tell the server — it will save it and forward to the other person
+    socket.emit('add-element', { roomId: ROOM_ID, element: currentLine })
+
     setCurrentLine(null)
+    setOtherLine(null) // clear their preview of our in-progress line
   }
 
   const commitText = () => {
     const value = inputRef.current?.value?.trim()
     if (value && textInput) {
-      setElements(prev => [...prev, {
+      const newElement = {
         id: Date.now().toString(),
         type: 'text',
         x: textInput.canvasX,
@@ -114,7 +159,9 @@ function App() {
         fontSize: 18,
         fill: '#2c2c2c',
         fontFamily: 'Georgia, serif',
-      }])
+      }
+      setElements(prev => [...prev, newElement])
+      socket.emit('add-element', { roomId: ROOM_ID, element: newElement })
     }
     setTextInput(null)
   }
@@ -122,6 +169,36 @@ function App() {
   const handleKeyDown = (e) => {
     if (e.key === 'Enter') commitText()
     if (e.key === 'Escape') setTextInput(null)
+  }
+
+  const renderElement = (el) => {
+    if (el.type === 'drawing') {
+      return (
+        <Line
+          key={el.id}
+          points={el.points}
+          stroke={el.stroke}
+          strokeWidth={el.strokeWidth}
+          tension={0.5}
+          lineCap="round"
+          lineJoin="round"
+        />
+      )
+    }
+    if (el.type === 'text') {
+      return (
+        <Text
+          key={el.id}
+          x={el.x}
+          y={el.y}
+          text={el.text}
+          fontSize={el.fontSize}
+          fill={el.fill}
+          fontFamily={el.fontFamily}
+        />
+      )
+    }
+    return null
   }
 
   return (
@@ -173,7 +250,7 @@ function App() {
         </button>
       </div>
 
-      {/* Floating HTML input for text entry */}
+      {/* Floating text input */}
       {textInput && (
         <input
           ref={inputRef}
@@ -217,41 +294,27 @@ function App() {
             fill="#faf9f6"
           />
 
-          {elements.map(el => {
-            if (el.type === 'drawing') {
-              return (
-                <Line
-                  key={el.id}
-                  points={el.points}
-                  stroke={el.stroke}
-                  strokeWidth={el.strokeWidth}
-                  tension={0.5}
-                  lineCap="round"
-                  lineJoin="round"
-                />
-              )
-            }
-            if (el.type === 'text') {
-              return (
-                <Text
-                  key={el.id}
-                  x={el.x}
-                  y={el.y}
-                  text={el.text}
-                  fontSize={el.fontSize}
-                  fill={el.fill}
-                  fontFamily={el.fontFamily}
-                />
-              )
-            }
-            return null
-          })}
+          {/* Committed elements */}
+          {elements.map(el => renderElement(el))}
 
+          {/* Your in-progress line */}
           {currentLine && (
             <Line
               points={currentLine.points}
               stroke={currentLine.stroke}
               strokeWidth={currentLine.strokeWidth}
+              tension={0.5}
+              lineCap="round"
+              lineJoin="round"
+            />
+          )}
+
+          {/* Other person's in-progress line */}
+          {otherLine && (
+            <Line
+              points={otherLine.points}
+              stroke="#e07a5f"
+              strokeWidth={otherLine.strokeWidth}
               tension={0.5}
               lineCap="round"
               lineJoin="round"
