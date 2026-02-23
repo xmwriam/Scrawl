@@ -1,7 +1,9 @@
+require('dotenv').config()
 const express = require('express')
 const http = require('http')
 const { Server } = require('socket.io')
 const cors = require('cors')
+const { createClient } = require('@supabase/supabase-js')
 
 const app = express()
 app.use(cors())
@@ -15,22 +17,26 @@ const io = new Server(server, {
   }
 })
 
-const rooms = {}
+// Supabase client
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY
+)
+
+const rooms = {} // in-memory: { roomId: { members: [] } }
 
 io.on('connection', (socket) => {
   console.log('connected:', socket.id)
 
-  socket.on('join-room', (roomId) => {
+  socket.on('join-room', async (roomId) => {
     if (!rooms[roomId]) {
-      rooms[roomId] = { members: [], elements: [] }
+      rooms[roomId] = { members: [] }
     }
 
     const room = rooms[roomId]
 
-    // Don't count the same socket twice
     if (room.members.includes(socket.id)) return
 
-    // Block if full
     if (room.members.length >= 2) {
       socket.emit('room-full')
       return
@@ -42,17 +48,43 @@ io.on('connection', (socket) => {
 
     console.log(`${socket.id} joined room ${roomId} (${room.members.length}/2)`)
 
-    socket.emit('canvas-state', room.elements)
+    // Load canvas state from Supabase instead of memory
+    const { data, error } = await supabase
+      .from('elements')
+      .select('*')
+      .eq('room_id', roomId)
+      .order('created_at', { ascending: true })
+
+    if (error) {
+      console.error('Error loading canvas:', error)
+      socket.emit('canvas-state', [])
+    } else {
+      // Send just the element data (unwrap from database row)
+      socket.emit('canvas-state', data.map(row => row.data))
+    }
 
     if (room.members.length === 2) {
       socket.to(roomId).emit('partner-joined')
-      socket.emit('partner-joined') // tell the first person too
+      socket.emit('partner-joined')
     }
   })
 
-  socket.on('add-element', ({ roomId, element }) => {
-    if (!rooms[roomId]) return
-    rooms[roomId].elements.push(element)
+  socket.on('add-element', async ({ roomId, element }) => {
+    // Save to Supabase
+    const { error } = await supabase
+      .from('elements')
+      .insert({
+        id: element.id,
+        room_id: roomId,
+        type: element.type,
+        data: element,
+      })
+
+    if (error) {
+      console.error('Error saving element:', error)
+    }
+
+    // Forward to the other person
     socket.to(roomId).emit('element-added', element)
   })
 
