@@ -6,6 +6,7 @@ const cors = require('cors')
 const multer = require('multer')
 const jwt = require('jsonwebtoken')
 const bcrypt = require('bcrypt')
+const { OAuth2Client } = require('google-auth-library')
 const { createClient } = require('@supabase/supabase-js')
 
 const app = express()
@@ -31,6 +32,8 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 )
+
+const googleClient = new OAuth2Client('241825963101-7u0qdkqaggmjl9ppo50dj31l784v2lth.apps.googleusercontent.com')
 
 const SALT_ROUNDS = 10
 
@@ -138,6 +141,63 @@ app.post('/auth/login', async (req, res) => {
     res.json({ token, userId: user.id, email: user.email })
   } catch (err) {
     console.error('Login error:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Google OAuth Login
+app.post('/auth/google-login', async (req, res) => {
+  try {
+    const { token } = req.body
+    if (!token) {
+      return res.status(400).json({ error: 'Google token required' })
+    }
+
+    // Verify Google token
+    const ticket = await googleClient.verifyIdToken({
+      idToken: token,
+      audience: '241825963101-7u0qdkqaggmjl9ppo50dj31l784v2lth.apps.googleusercontent.com'
+    })
+
+    const payload = ticket.getPayload()
+    const email = payload.email
+    const googleId = payload.sub
+
+    if (!email) {
+      return res.status(400).json({ error: 'Email not provided by Google' })
+    }
+
+    // Find or create user
+    let { data: user, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', email)
+      .single()
+
+    if (error && error.code === 'PGRST116') {
+      // User doesn't exist, create new one
+      const { data: newUser, error: insertError } = await supabase
+        .from('users')
+        .insert({ email, password_hash: 'google_oauth' })
+        .select()
+        .single()
+
+      if (insertError) throw insertError
+      user = newUser
+    } else if (error) {
+      throw error
+    }
+
+    // Generate JWT token
+    const jwtToken = jwt.sign(
+      { userId: user.id, email: user.email },
+      process.env.JWT_SECRET,
+      { expiresIn: '30d' }
+    )
+
+    res.json({ token: jwtToken, userId: user.id, email: user.email })
+  } catch (err) {
+    console.error('Google login error:', err)
     res.status(500).json({ error: err.message })
   }
 })

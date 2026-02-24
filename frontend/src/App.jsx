@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { GoogleOAuthProvider } from '@react-oauth/google'
 import { AuthProvider } from './context/AuthContext'
 import ProtectedRoute from './components/ProtectedRoute'
 import Home from './pages/Home'
@@ -6,9 +7,12 @@ import Room from './pages/Room'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
 
+const GOOGLE_CLIENT_ID = '241825963101-7u0qdkqaggmjl9ppo50dj31l784v2lth.apps.googleusercontent.com'
+
 function App() {
   return (
-    <AuthProvider>
+    <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
+      <AuthProvider>
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<Login />} />
@@ -27,6 +31,7 @@ function App() {
         </Routes>
       </BrowserRouter>
     </AuthProvider>
+    </GoogleOAuthProvider>
   )
 }
 

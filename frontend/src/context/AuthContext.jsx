@@ -47,6 +47,22 @@ export function AuthProvider({ children }) {
     return data
   }
 
+  const googleLogin = async (credentialResponse) => {
+    const response = await fetch('http://localhost:3001/auth/google-login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: credentialResponse.credential })
+    })
+    const data = await response.json()
+    if (!response.ok) throw new Error(data.error)
+
+    setToken(data.token)
+    setUser({ userId: data.userId, email: data.email })
+    localStorage.setItem('token', data.token)
+    localStorage.setItem('user', JSON.stringify({ userId: data.userId, email: data.email }))
+    return data
+  }
+
   const logout = () => {
     setUser(null)
     setToken(null)
@@ -55,7 +71,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, signup, login, logout }}>
+    <AuthContext.Provider value={{ user, token, loading, signup, login, googleLogin, logout }}>
       {children}
     </AuthContext.Provider>
   )

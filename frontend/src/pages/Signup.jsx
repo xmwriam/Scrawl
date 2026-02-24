@@ -1,10 +1,11 @@
 import { useContext, useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
+import { GoogleLogin } from '@react-oauth/google'
 import { AuthContext } from '../context/AuthContext'
 
 function Signup() {
   const navigate = useNavigate()
-  const { signup } = useContext(AuthContext)
+  const { signup, googleLogin } = useContext(AuthContext)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -31,6 +32,19 @@ function Signup() {
       await signup(email, password)
       alert('Account created! Please log in.')
       navigate('/login')
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleGoogleSignup = async (credentialResponse) => {
+    setError('')
+    setLoading(true)
+    try {
+      await googleLogin(credentialResponse)
+      navigate('/')
     } catch (err) {
       setError(err.message)
     } finally {
@@ -176,6 +190,18 @@ function Signup() {
         >
           {loading ? 'Creating account...' : 'Sign Up'}
         </button>
+
+        <div style={{ position: 'relative', margin: '16px 0' }}>
+          <div style={{ position: 'absolute', left: 0, right: 0, top: '50%', borderTop: '1px solid #ddd' }} />
+          <div style={{ position: 'relative', textAlign: 'center', background: 'white', padding: '0 8px' }}>
+            <span style={{ fontSize: 12, color: '#999' }}>or</span>
+          </div>
+        </div>
+
+        <GoogleLogin
+          onSuccess={handleGoogleSignup}
+          onError={() => setError('Google signup failed')}
+        />
 
         <p style={{ margin: 0, textAlign: 'center', fontSize: 14, color: '#666' }}>
           Already have an account?{' '}
