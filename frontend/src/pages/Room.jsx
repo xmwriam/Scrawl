@@ -13,14 +13,11 @@ function Room() {
   const location = useLocation()
   const { token } = useContext(AuthContext)
   const socketRef = useRef(null)
-  const [roomId, setRoomId] = useState(paramRoomId)
+  const roomId = paramRoomId
   const [roomCode, setRoomCode] = useState(location.state?.roomCode || '')
-  const [showShareModal, setShowShareModal] = useState(false)
   const [stagePos, setStagePos] = useState({ x: 0, y: 0 })
 
-  // sentElements — locked forever, visible to both people
   const [sentElements, setSentElements] = useState([])
-  // draftElements — only visible to you, not yet sent
   const [draftElements, setDraftElements] = useState([])
 
   const [currentLine, setCurrentLine] = useState(null)
@@ -35,9 +32,11 @@ function Room() {
   const [partnerOnline, setPartnerOnline] = useState(false)
   const [uploadingImage, setUploadingImage] = useState(false)
   const [loadedImages, setLoadedImages] = useState({})
-  const [selectedId, setSelectedId] = useState(null) // for glow on click
-  const [hoveredElementId, setHoveredElementId] = useState(null) // for timestamp on hover
+  const [selectedId, setSelectedId] = useState(null)
+  const [hoveredElementId, setHoveredElementId] = useState(null)
+  const [justSent, setJustSent] = useState(false)
   const isDrawing = useRef(false)
+  const lastPoint = useRef(null)
   const stageRef = useRef(null)
   const inputRef = useRef(null)
   const fileInputRef = useRef(null)
@@ -48,40 +47,27 @@ function Room() {
     const socket = io('http://localhost:3001')
     socketRef.current = socket
 
-    // Emit join with token
     socket.emit('join-room', roomId, token)
 
-    // Load sent elements when joining
     socket.on('canvas-state', (elements) => {
       setSentElements(elements)
     })
 
-    // Partner sent their drafts — add to our sent elements
     socket.on('elements-received', (elements) => {
       setSentElements(prev => [...prev, ...elements])
     })
 
-    socket.on('partner-joined', () => {
-      setPartnerOnline(true)
-    })
+    socket.on('partner-joined', () => setPartnerOnline(true))
+    socket.on('partner-left', () => setPartnerOnline(false))
 
-    socket.on('partner-left', () => {
-      setPartnerOnline(false)
-    })
-
-    // Handle auth errors
     socket.on('auth-error', (error) => {
       console.error('Auth error:', error)
       alert(error)
       navigate('/')
     })
 
-    // Cleanup on disconnect
-    socket.on('disconnect', () => {
-      setPartnerOnline(false)
-    })
+    socket.on('disconnect', () => setPartnerOnline(false))
 
-    // Cleanup function
     return () => {
       socket.off('canvas-state')
       socket.off('elements-received')
@@ -93,7 +79,6 @@ function Room() {
     }
   }, [roomId, token, navigate])
 
-  // Load images whenever sent or draft elements change
   useEffect(() => {
     const allElements = [...sentElements, ...draftElements]
     allElements.forEach(el => {
@@ -111,7 +96,10 @@ function Room() {
     const handleWheel = (e) => {
       if (isDrawing.current) return
       e.preventDefault()
-      setStagePos(prev => ({ x: 0, y: prev.y - e.deltaY }))
+      setStagePos(prev => {
+        const newY = prev.y - e.deltaY
+        return { x: 0, y: Math.min(0, newY) }
+      })
     }
     window.addEventListener('wheel', handleWheel, { passive: false })
     return () => window.removeEventListener('wheel', handleWheel)
@@ -146,50 +134,59 @@ function Room() {
     const today = new Date()
     const yesterday = new Date(today)
     yesterday.setDate(yesterday.getDate() - 1)
-    
-    const isToday = 
+
+    const isToday =
       date.getFullYear() === today.getFullYear() &&
       date.getMonth() === today.getMonth() &&
       date.getDate() === today.getDate()
-    
+
     const isYesterday =
       date.getFullYear() === yesterday.getFullYear() &&
       date.getMonth() === yesterday.getMonth() &&
       date.getDate() === yesterday.getDate()
-    
+
     const hours = String(date.getHours()).padStart(2, '0')
     const minutes = String(date.getMinutes()).padStart(2, '0')
     const day = String(date.getDate()).padStart(2, '0')
     const month = String(date.getMonth() + 1).padStart(2, '0')
-    
-    if (isToday) {
-      return `Today ${hours}:${minutes}`
-    } else if (isYesterday) {
-      return `Yesterday ${hours}:${minutes}`
-    } else {
-      return `${day}/${month} ${hours}:${minutes}`
-    }
+
+    if (isToday) return `Today ${hours}:${minutes}`
+    if (isYesterday) return `Yesterday ${hours}:${minutes}`
+    return `${day}/${month} ${hours}:${minutes}`
   }
 
-  // Add to draft — save to DB but don't tell partner yet
+  const getRecencyOpacity = (el) => {
+    const allSent = sentElements.filter(e => e.createdAt)
+    if (allSent.length === 0) return 1
+
+    const timestamps = allSent.map(e => new Date(e.createdAt).getTime())
+    const newest = Math.max(...timestamps)
+    const oldest = Math.min(...timestamps)
+    const range = newest - oldest
+
+    if (range === 0) return 1
+
+    const elTime = new Date(el.createdAt).getTime()
+    const normalized = (elTime - oldest) / range
+    return 0.35 + normalized * 0.65
+  }
+
   const addDraft = (element) => {
     const elementWithTime = { ...element, createdAt: new Date().toISOString() }
     setDraftElements(prev => [...prev, elementWithTime])
     socketRef.current.emit('save-draft', { roomId, element: elementWithTime })
   }
 
-  // Send all drafts to partner at once
   const handleSend = () => {
     if (draftElements.length === 0) return
-
-    // Move drafts to sent
     setSentElements(prev => [...prev, ...draftElements])
     socketRef.current.emit('send-drafts', { roomId, elements: draftElements })
     setDraftElements([])
+    setJustSent(true)
+    setTimeout(() => setJustSent(false), 2000)
   }
 
   const handleMouseDown = (e) => {
-    // Clicking background deselects
     const isBackground =
       e.target === e.target.getStage() || e.target.name() === 'background'
 
@@ -212,6 +209,7 @@ function Room() {
       if (!isBackground) return
       isDrawing.current = true
       const pos = getPointerPosition()
+      lastPoint.current = pos
       setCurrentLine({
         id: Date.now().toString(),
         type: 'drawing',
@@ -225,6 +223,16 @@ function Room() {
   const handleMouseMove = () => {
     if (!isDrawing.current || !currentLine) return
     const pos = getPointerPosition()
+
+    // Only add point if moved at least 3px — reduces jaggedness
+    if (lastPoint.current) {
+      const dx = pos.x - lastPoint.current.x
+      const dy = pos.y - lastPoint.current.y
+      const dist = Math.sqrt(dx * dx + dy * dy)
+      if (dist < 3) return
+    }
+
+    lastPoint.current = pos
     setCurrentLine(prev => ({
       ...prev,
       points: [...prev.points, pos.x, pos.y]
@@ -234,6 +242,7 @@ function Room() {
   const handleMouseUp = () => {
     if (!isDrawing.current || !currentLine) return
     isDrawing.current = false
+    lastPoint.current = null
     addDraft(currentLine)
     setCurrentLine(null)
   }
@@ -255,53 +264,28 @@ function Room() {
     setTextInput(null)
   }
 
-  const handleImageDragEnd = (elId, newX, newY, isDraft) => {
-    if (isDraft) {
-      setDraftElements(prev =>
-        prev.map(el => el.id === elId ? { ...el, x: newX, y: newY } : el)
-      )
-    } else {
-      setSentElements(prev =>
-        prev.map(el => el.id === elId ? { ...el, x: newX, y: newY } : el)
-      )
-    }
+  const handleImageDragEnd = (elId, newX, newY) => {
+    setDraftElements(prev =>
+      prev.map(el => el.id === elId ? { ...el, x: newX, y: newY } : el)
+    )
   }
 
-  const handleElementDragEnd = (elId, deltaX, deltaY, isDraft) => {
-    if (isDraft) {
-      setDraftElements(prev =>
-        prev.map(el => {
-          if (el.id === elId) {
-            if (el.type === 'drawing') {
-              // Offset all points
-              return {
-                ...el,
-                points: el.points.map((p, i) => i % 2 === 0 ? p + deltaX : p + deltaY)
-              }
-            } else if (el.type === 'text') {
-              return { ...el, x: el.x + deltaX, y: el.y + deltaY }
-            }
+  const handleElementDragEnd = (elId, deltaX, deltaY) => {
+    setDraftElements(prev =>
+      prev.map(el => {
+        if (el.id !== elId) return el
+        if (el.type === 'drawing') {
+          return {
+            ...el,
+            points: el.points.map((p, i) => i % 2 === 0 ? p + deltaX : p + deltaY)
           }
-          return el
-        })
-      )
-    } else {
-      setSentElements(prev =>
-        prev.map(el => {
-          if (el.id === elId) {
-            if (el.type === 'drawing') {
-              return {
-                ...el,
-                points: el.points.map((p, i) => i % 2 === 0 ? p + deltaX : p + deltaY)
-              }
-            } else if (el.type === 'text') {
-              return { ...el, x: el.x + deltaX, y: el.y + deltaY }
-            }
-          }
-          return el
-        })
-      )
-    }
+        }
+        if (el.type === 'text') {
+          return { ...el, x: el.x + deltaX, y: el.y + deltaY }
+        }
+        return el
+      })
+    )
   }
 
   const handleKeyDown = (e) => {
@@ -313,18 +297,10 @@ function Room() {
   }
 
   const deleteElement = (elementId) => {
-    // Try to delete from draft first
+    // Only drafts can be deleted — sent elements are locked forever
     const draftIndex = draftElements.findIndex(el => el.id === elementId)
     if (draftIndex !== -1) {
       setDraftElements(prev => prev.filter((_, i) => i !== draftIndex))
-      setSelectedId(null)
-      return
-    }
-    
-    // Then try sent elements
-    const sentIndex = sentElements.findIndex(el => el.id === elementId)
-    if (sentIndex !== -1) {
-      setSentElements(prev => prev.filter((_, i) => i !== sentIndex))
       setSelectedId(null)
     }
   }
@@ -398,11 +374,9 @@ function Room() {
 
     const commonProps = {
       key: el.id,
-      // clicking selects the element to show glow
       onClick: () => setSelectedId(isSelected ? null : el.id),
-      // draft elements are slightly faded so you know they're not sent yet
-      opacity: isDraft ? 0.6 : 1,
-      draggable: true,
+      opacity: isDraft ? 0.6 : getRecencyOpacity(el),
+      draggable: isDraft, // only drafts are draggable
       onMouseEnter: () => setHoveredElementId(el.id),
       onMouseLeave: () => setHoveredElementId(null),
     }
@@ -416,7 +390,7 @@ function Room() {
         fontSize={12}
         fill="#888"
         fontFamily="Arial"
-        pointerEvents="none"
+        listening={false}
       />
     ) : null
 
@@ -427,13 +401,16 @@ function Room() {
           points={el.points}
           stroke={el.stroke || '#2c2c2c'}
           strokeWidth={el.strokeWidth}
-          tension={0.5}
+          tension={0.4}
           lineCap="round"
           lineJoin="round"
           onDragEnd={(e) => {
-            const offset = e.target.offset()
-            handleElementDragEnd(el.id, offset.x, offset.y, isDraft)
-            e.target.offset({ x: 0, y: 0 })
+            const node = e.target
+            const dx = node.x()
+            const dy = node.y()
+            handleElementDragEnd(el.id, dx, dy)
+            node.x(0)
+            node.y(0)
           }}
           {...glowProps}
         />,
@@ -451,7 +428,11 @@ function Room() {
           fontSize={el.fontSize}
           fill={el.fill || '#2c2c2c'}
           fontFamily={el.fontFamily}
-          onDragEnd={(e) => handleElementDragEnd(el.id, e.target.x() - el.x, e.target.y() - el.y, isDraft)}
+          onDragEnd={(e) => {
+            handleElementDragEnd(el.id, e.target.x() - el.x, e.target.y() - el.y)
+            e.target.x(el.x)
+            e.target.y(el.y)
+          }}
           {...glowProps}
         />,
         timestampElement,
@@ -467,8 +448,9 @@ function Room() {
           width={el.width}
           height={el.height}
           image={loadedImages[el.id]}
-          draggable={true}
-          onDragEnd={(e) => handleImageDragEnd(el.id, e.target.x(), e.target.y(), isDraft)}
+          onDragEnd={(e) => {
+            handleImageDragEnd(el.id, e.target.x(), e.target.y())
+          }}
           {...glowProps}
         />,
         timestampElement,
@@ -512,7 +494,11 @@ function Room() {
   }
 
   return (
-    <div style={{ position: 'relative', width: '100vw', height: '100vh' }}>
+    <div
+      style={{ position: 'relative', width: '100vw', height: '100vh' }}
+      onKeyDown={handleKeyDown}
+      tabIndex={0}
+    >
 
       {/* Toolbar */}
       <div style={{
@@ -547,14 +533,12 @@ function Room() {
           ✏️ Draw
         </button>
 
-        {/* Draw Color & Size */}
         {tool === 'draw' && (
           <>
             <div style={{ position: 'relative' }}>
               <button
                 onClick={() => setShowColorPicker(!showColorPicker)}
                 style={{
-                  padding: '6px 12px',
                   borderRadius: 8,
                   border: 'none',
                   cursor: 'pointer',
@@ -582,7 +566,7 @@ function Room() {
                   {['#2c2c2c', '#ff6b6b', '#4ecdc4', '#ffe66d', '#ff006e', '#8e44ad', '#2e86ab', '#a23b72'].map(color => (
                     <button
                       key={color}
-                      onClick={() => { setDrawColor(color); setShowColorPicker(false); }}
+                      onClick={() => { setDrawColor(color); setShowColorPicker(false) }}
                       style={{
                         width: 28,
                         height: 28,
@@ -596,8 +580,9 @@ function Room() {
                 </div>
               )}
             </div>
+
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#666' }}>
-              Size: 
+              Size:
               <input
                 type="range"
                 min="1"
@@ -608,7 +593,8 @@ function Room() {
               />
               <span>{brushSize}px</span>
             </div>
-            {selectedId && (
+
+            {selectedId && draftElements.find(el => el.id === selectedId) && (
               <button
                 onClick={() => deleteElement(selectedId)}
                 style={{
@@ -644,13 +630,11 @@ function Room() {
           T Text
         </button>
 
-        {/* Text Color */}
         {tool === 'text' && (
           <div style={{ position: 'relative' }}>
             <button
               onClick={() => setShowColorPicker(!showColorPicker)}
               style={{
-                padding: '6px 12px',
                 borderRadius: 8,
                 border: 'none',
                 cursor: 'pointer',
@@ -678,7 +662,7 @@ function Room() {
                 {['#2c2c2c', '#ff6b6b', '#4ecdc4', '#ffe66d', '#ff006e', '#8e44ad', '#2e86ab', '#a23b72'].map(color => (
                   <button
                     key={color}
-                    onClick={() => { setTextColor(color); setShowColorPicker(false); }}
+                    onClick={() => { setTextColor(color); setShowColorPicker(false) }}
                     style={{
                       width: 28,
                       height: 28,
@@ -712,7 +696,6 @@ function Room() {
           {uploadingImage ? 'uploading...' : '🖼️ Image'}
         </button>
 
-        {/* Stickers */}
         <div style={{ position: 'relative' }}>
           <button
             onClick={() => setShowStickers(!showStickers)}
@@ -755,7 +738,6 @@ function Room() {
                     borderRadius: 6,
                     cursor: 'pointer',
                     padding: 8,
-                    transition: 'all 0.2s',
                   }}
                 >
                   {emoji}
@@ -798,7 +780,6 @@ function Room() {
 
         <div style={{ width: 1, height: 24, background: '#e0e0e0', margin: '0 4px' }} />
 
-        {/* Send button */}
         <button
           onClick={handleSend}
           disabled={draftElements.length === 0}
@@ -807,18 +788,17 @@ function Room() {
             borderRadius: 8,
             border: 'none',
             cursor: draftElements.length === 0 ? 'default' : 'pointer',
-            background: draftElements.length === 0 ? '#f0f0f0' : '#2c2c2c',
-            color: draftElements.length === 0 ? '#aaa' : 'white',
+            background: justSent ? '#4caf50' : draftElements.length === 0 ? '#f0f0f0' : '#2c2c2c',
+            color: justSent || draftElements.length > 0 ? 'white' : '#aaa',
             fontWeight: 700,
             fontSize: 14,
-            transition: 'all 0.2s',
+            transition: 'all 0.3s',
           }}
         >
-          send {draftElements.length > 0 ? `(${draftElements.length})` : ''}
+          {justSent ? '✓ sent' : `send${draftElements.length > 0 ? ` (${draftElements.length})` : ''}`}
         </button>
       </div>
 
-      {/* Hidden file input */}
       <input
         ref={fileInputRef}
         type="file"
@@ -827,7 +807,6 @@ function Room() {
         onChange={handleImageUpload}
       />
 
-      {/* Floating text input */}
       {textInput && (
         <input
           ref={inputRef}
@@ -843,7 +822,7 @@ function Room() {
             outline: 'none',
             fontSize: 18,
             fontFamily: 'Georgia, serif',
-            color: '#2c2c2c',
+            color: textColor,
             minWidth: 120,
             zIndex: 200,
           }}
@@ -870,19 +849,15 @@ function Room() {
             fill="#faf9f6"
           />
 
-          {/* Sent elements — fully opaque, locked forever */}
           {sentElements.map(el => renderElement(el, false)).flat()}
-
-          {/* Draft elements — faded, only visible to you */}
           {draftElements.map(el => renderElement(el, true)).flat()}
 
-          {/* Line currently being drawn */}
           {currentLine && (
             <Line
               points={currentLine.points}
               stroke={currentLine.stroke}
               strokeWidth={currentLine.strokeWidth}
-              tension={0.5}
+              tension={0.4}
               lineCap="round"
               lineJoin="round"
             />
