@@ -1,0 +1,164 @@
+\documentclass{beamer}
+\usetheme{CambridgeUS}
+\usecolortheme{beaver}
+\usefonttheme{serif}
+\usepackage{hyperref}
+
+\usebackgroundtemplate%
+{%
+    \includegraphics[width=\paperwidth,height=\paperheight]{bg.png}%
+}
+
+\title{Scrawl}
+\subtitle{A Freeform Shared Journal Application}
+\author{Mariam Eqbal \and Sheetal Lodhi}
+\date{\today}
+
+\begin{document}
+
+\begin{frame}
+    \titlepage
+\end{frame}
+
+% ─────────────────────────────────────────────
+\section{Objective}
+\begin{frame}{Objective}
+    \begin{enumerate}
+        \item To build a real-time, freeform shared canvas for two people to communicate expressively.
+        \item To learn and establish proficiency in a modern full-stack web development stack (React, Node.js, Socket.io, Supabase).
+        \item To design an intimate, asynchronous digital experience that feels like passing a physical journal.
+    \end{enumerate}
+\end{frame}
+
+% ─────────────────────────────────────────────
+\section{What is Scrawl?}
+\begin{frame}{What is Scrawl?}
+    \begin{enumerate}
+        \item A private, infinite shared canvas between exactly \textbf{two people}.
+        \item Users can place \textbf{freehand drawings}, \textbf{text}, and \textbf{images} anywhere on the canvas.
+        \item Content is composed privately as a \textbf{draft}, then sent all at once — like sealing and posting a letter.
+        \item Once sent, all content is \textbf{locked forever} — nothing can be moved or deleted.
+        \item The canvas grows \textbf{downward infinitely}, like an endless shared notebook.
+    \end{enumerate}
+\end{frame}
+
+% ─────────────────────────────────────────────
+\section{Tech Stack}
+\begin{frame}{Tech Stack}
+    \begin{enumerate}
+        \item \textbf{Frontend:} React (Vite), react-konva, React Router
+        \item \textbf{Backend:} Node.js, Express, Socket.io
+        \item \textbf{Database:} Supabase (PostgreSQL) for element persistence and room management
+        \item \textbf{Storage:} Supabase Storage for uploaded images
+        \item \textbf{Authentication:} Custom JWT + Google OAuth via \texttt{@react-oauth/google}
+        \item \textbf{Deployment:} Vercel (frontend), Railway (backend)
+    \end{enumerate}
+\end{frame}
+
+% ─────────────────────────────────────────────
+\section{Features}
+\begin{frame}{Features Implemented}
+    \begin{enumerate}
+        \item \textbf{Infinite canvas} — scrolls downward, clamped at the top like a real journal
+        \item \textbf{Freehand drawing} — smooth lines with color picker and brush size control
+        \item \textbf{Click-to-place text} — type anywhere on the canvas in any color
+        \item \textbf{Image upload} — photos placed directly onto the canvas
+        \item \textbf{Draft \& Send mechanic} — compose privately, send all at once
+        \item \textbf{Real-time sync} — Socket.io keeps both users in sync instantly
+        \item \textbf{Unique room URLs} — each journal gets a shareable room code
+        \item \textbf{Persistence} — full canvas survives server restarts via Supabase
+        \item \textbf{Google OAuth login} — one-click sign in, no passwords needed
+        \item \textbf{Recency opacity} — older elements fade subtly, newer ones are crisp
+    \end{enumerate}
+\end{frame}
+
+% ─────────────────────────────────────────────
+\section{Division of Work}
+\begin{frame}{Division of Work}
+    \begin{enumerate}
+        \item \textbf{Mariam} — Canvas architecture, drawing engine (Konva), real-time sync (Socket.io), deployment setup, core UX decisions
+        \item \textbf{Sheetal} — Authentication system (JWT + Google OAuth), room management (create/join with room codes), color picker, brush size controls, stickers, timestamp display
+    \end{enumerate}
+\end{frame}
+
+% ─────────────────────────────────────────────
+\section{Timeline}
+\begin{frame}{Timeline}
+    \begin{enumerate}
+        \item \textbf{Phase 1} — Local canvas: drawing and text placement
+        \item \textbf{Phase 2} — Real-time sync with Socket.io (two tabs stay in sync)
+        \item \textbf{Phase 3} — Unique room URLs, 2-person room lock
+        \item \textbf{Phase 4} — Supabase persistence (canvas survives restarts)
+        \item \textbf{Phase 5} — Image upload via backend + Supabase Storage
+        \item \textbf{Phase 6} — Draft \& Send mechanic, element locking, glow on click
+        \item \textbf{Phase 7} — Google OAuth, room codes, polish (recency opacity, scroll clamp, smoother lines)
+        \item \textbf{Phase 8} — Deployment (Vercel + Railway)
+    \end{enumerate}
+\end{frame}
+
+% ─────────────────────────────────────────────
+\section{Repository}
+\begin{frame}{Repository}
+    \href{https://github.com/xmwriam/Scrawl}{\beamergotobutton{GitHub Repository}}
+\end{frame}
+
+% ─────────────────────────────────────────────
+\section{Learnings}
+\begin{frame}{Explicit Learnings}
+    \begin{enumerate}
+        \item Building real-time applications with \textbf{WebSockets} (Socket.io)
+        \item Canvas programming with \textbf{Konva.js} — coordinates, layers, hit detection
+        \item Full-stack architecture — React frontend talking to a Node/Express backend
+        \item Database design and persistence with \textbf{Supabase} (PostgreSQL)
+        \item Authentication flows — JWT tokens, Google OAuth, protected routes
+        \item File upload and cloud storage (Supabase Storage)
+    \end{enumerate}
+\end{frame}
+
+\begin{frame}{Implicit Learnings}
+    \begin{enumerate}
+        \item Debugging real-time race conditions and browser focus issues
+        \item Managing shared state across two live users simultaneously
+        \item Thinking carefully about \textbf{product design} before writing code
+        \item Dividing and integrating work across a two-person team using Git
+        \item Handling environment variables and secrets safely across environments
+        \item The value of incremental, phase-by-phase development
+    \end{enumerate}
+\end{frame}
+
+% ─────────────────────────────────────────────
+\section{Challenges}
+\begin{frame}{Challenges}
+    \begin{enumerate}
+        \item \textbf{Real-time sync} — React Strict Mode double-mounting caused the room to appear full before a second user joined; fixed by moving socket creation inside \texttt{useEffect} with proper cleanup.
+        \item \textbf{Text input focus} — Konva canvas stole focus from the floating HTML input; fixed with a \texttt{setTimeout} defer pattern.
+        \item \textbf{Supabase Storage RLS} — Row Level Security policies blocked image uploads from the frontend; solved by routing uploads through the backend using the service role key.
+        \item \textbf{Smooth drawing} — Raw mouse events produced jagged lines; fixed by minimum distance threshold (3px) before sampling a new point.
+        \item \textbf{Team coordination} — Merging Sheetal's auth system into the existing canvas architecture required careful integration.
+    \end{enumerate}
+\end{frame}
+
+% ─────────────────────────────────────────────
+\section{Future Scope}
+\begin{frame}{Future Scope}
+    \begin{enumerate}
+        \item \textbf{Group journals} — lift the 2-person cap; the userId-based architecture already supports this
+        \item \textbf{Audio notes} — drop a short voice recording onto the canvas as a playable waveform
+        \item \textbf{Time-lapse replay} — replay the journal from the beginning, stroke by stroke
+        \item \textbf{Reactions} — hover over an element and leave a small floating reaction
+        \item \textbf{Mobile app} — React Native port for a natural touch and stylus experience
+        \item \textbf{Export} — download the full journal as a PDF keepsake
+        \item \textbf{End-to-end encryption} — encrypt canvas content so even the server cannot read it
+    \end{enumerate}
+\end{frame}
+
+% ─────────────────────────────────────────────
+\section{Thank You}
+\begin{frame}{ }
+    \begin{center}
+        \LARGE
+        Thank You
+    \end{center}
+\end{frame}
+
+\end{document}

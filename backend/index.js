@@ -33,7 +33,7 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_KEY
 )
 
-const googleClient = new OAuth2Client('241825963101-7u0qdkqaggmjl9ppo50dj31l784v2lth.apps.googleusercontent.com')
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID)
 
 const SALT_ROUNDS = 10
 
@@ -156,7 +156,7 @@ app.post('/auth/google-login', async (req, res) => {
     // Verify Google token
     const ticket = await googleClient.verifyIdToken({
       idToken: token,
-      audience: '241825963101-7u0qdkqaggmjl9ppo50dj31l784v2lth.apps.googleusercontent.com'
+      audience: process.env.GOOGLE_CLIENT_ID
     })
 
     const payload = ticket.getPayload()
