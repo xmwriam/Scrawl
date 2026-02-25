@@ -4,6 +4,7 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { io } from 'socket.io-client'
 import { AuthContext } from '../context/AuthContext'
 
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'
 const CANVAS_WIDTH = window.innerWidth
 const CANVAS_HEIGHT = 10000
 
@@ -44,7 +45,7 @@ function Room() {
   useEffect(() => {
     if (!roomId || !token) return
 
-    const socket = io('http://localhost:3001')
+    const socket = io(`${BACKEND_URL}`)
     socketRef.current = socket
 
     socket.emit('join-room', roomId, token)
@@ -312,7 +313,7 @@ function Room() {
     try {
       const formData = new FormData()
       formData.append('file', file)
-      const response = await fetch('http://localhost:3001/upload', {
+      const response = await fetch(`${BACKEND_URL}/upload`, {
         method: 'POST',
         body: formData,
       })

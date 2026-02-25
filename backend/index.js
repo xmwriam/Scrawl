@@ -218,8 +218,10 @@ const verifyToken = (req, res, next) => {
 
 // Create new room
 app.post('/rooms/create', verifyToken, async (req, res) => {
+  console.log('rooms/create hit, user:', req.user) 
   try {
     const userId = req.user.userId
+    console.log('userId:', userId) 
 
     // Generate unique room code
     let roomCode

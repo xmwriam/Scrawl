@@ -1,5 +1,6 @@
 import { createContext, useState, useEffect } from 'react'
 
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'
 export const AuthContext = createContext()
 
 export function AuthProvider({ children }) {
@@ -19,7 +20,7 @@ export function AuthProvider({ children }) {
   }, [])
 
   const signup = async (email, password) => {
-    const response = await fetch('http://localhost:3001/auth/signup', {
+    const response = await fetch(`${BACKEND_URL}/auth/signup`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password })
@@ -32,7 +33,7 @@ export function AuthProvider({ children }) {
   }
 
   const login = async (email, password) => {
-    const response = await fetch('http://localhost:3001/auth/login', {
+    const response = await fetch(`${BACKEND_URL}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password })
@@ -48,7 +49,7 @@ export function AuthProvider({ children }) {
   }
 
   const googleLogin = async (credentialResponse) => {
-    const response = await fetch('http://localhost:3001/auth/google-login', {
+    const response = await fetch(`${BACKEND_URL}/auth/google-login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: credentialResponse.credential })

@@ -2,6 +2,8 @@ import { useNavigate } from 'react-router-dom'
 import { useContext, useState } from 'react'
 import { AuthContext } from '../context/AuthContext'
 
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'
+
 function Home() {
   const navigate = useNavigate()
   const { user, token, logout } = useContext(AuthContext)
@@ -15,7 +17,7 @@ function Home() {
       setLoading(true)
       setError('')
 
-      const response = await fetch('http://localhost:3001/rooms/create', {
+      const response = await fetch(`${BACKEND_URL}/rooms/create`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -41,7 +43,7 @@ function Home() {
 
     try {
       // Call backend to verify room and add user
-      const response = await fetch('http://localhost:3001/rooms/join', {
+      const response = await fetch(`${BACKEND_URL}/rooms/join`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
