@@ -1,3 +1,6 @@
+// Limit for max distance from last drawing (in px)
+const MAX_DRAW_DISTANCE = 1000;
+
 import { Stage, Layer, Rect, Line, Text, Image as KonvaImage } from 'react-konva'
 import { useRef, useState, useEffect, useContext } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
@@ -9,6 +12,7 @@ const CANVAS_WIDTH = window.innerWidth
 const CANVAS_HEIGHT = 10000
 
 function Room() {
+    const [drawWarning, setDrawWarning] = useState("");
   const { roomId: paramRoomId } = useParams()
   const navigate = useNavigate()
   const location = useLocation()
@@ -207,18 +211,60 @@ function Room() {
     }
 
     if (tool === 'draw') {
-      if (!isBackground) return
-      isDrawing.current = true
-      const pos = getPointerPosition()
-      lastPoint.current = pos
+      if (!isBackground) return;
+      // Find the most recent drawing element
+      const allDrawings = [...sentElements, ...draftElements].filter(el => el.type === 'drawing');
+      let lastDraw = null;
+      if (allDrawings.length > 0) {
+        lastDraw = allDrawings.reduce((a, b) => {
+          const aTime = new Date(a.createdAt || 0).getTime();
+          const bTime = new Date(b.createdAt || 0).getTime();
+          return aTime > bTime ? a : b;
+        });
+      }
+      const pos = getPointerPosition();
+      if (lastDraw && lastDraw.points && lastDraw.points.length >= 2) {
+        const lastX = lastDraw.points[lastDraw.points.length - 2];
+        const lastY = lastDraw.points[lastDraw.points.length - 1];
+        const dx = pos.x - lastX;
+        const dy = pos.y - lastY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > MAX_DRAW_DISTANCE) {
+          setDrawWarning(`You can't start drawing more than ${MAX_DRAW_DISTANCE}px from the last drawing.`);
+          setTimeout(() => setDrawWarning(""), 2500);
+          return;
+        }
+      }
+      isDrawing.current = true;
+      lastPoint.current = pos;
       setCurrentLine({
         id: Date.now().toString(),
         type: 'drawing',
         points: [pos.x, pos.y],
         stroke: drawColor,
         strokeWidth: brushSize,
-      })
+      });
     }
+    // Show warning if user tries to draw too far
+    // Place this above the Stage component
+    {drawWarning && (
+      <div style={{
+        position: 'fixed',
+        top: 80,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        background: '#ffefc1',
+        color: '#b26a00',
+        padding: '10px 24px',
+        borderRadius: 10,
+        fontWeight: 600,
+        fontSize: 16,
+        zIndex: 9999,
+        boxShadow: '0 2px 8px rgba(0,0,0,0.08)'
+      }}>
+        {drawWarning}
+      </div>
+    )}
   }
 
   const handleMouseMove = () => {
@@ -500,6 +546,26 @@ function Room() {
       onKeyDown={handleKeyDown}
       tabIndex={0}
     >
+
+      {/* Draw distance warning */}
+      {drawWarning && (
+        <div style={{
+          position: 'fixed',
+          top: 70,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          background: '#ffefc1',
+          color: '#b26a00',
+          padding: '10px 24px',
+          borderRadius: 10,
+          fontWeight: 600,
+          fontSize: 16,
+          zIndex: 9999,
+          boxShadow: '0 2px 8px rgba(0,0,0,0.08)'
+        }}>
+          {drawWarning}
+        </div>
+      )}
 
       {/* Toolbar */}
       <div style={{
