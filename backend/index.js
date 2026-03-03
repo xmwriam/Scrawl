@@ -10,7 +10,9 @@ const { OAuth2Client } = require('google-auth-library')
 const { createClient } = require('@supabase/supabase-js')
 
 const app = express()
-app.use(cors())
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:5173'
+}))
 app.use(express.json())
 
 const upload = multer({ storage: multer.memoryStorage() })
@@ -18,7 +20,7 @@ const server = http.createServer(app)
 
 const io = new Server(server, {
   cors: {
-    origin: 'http://localhost:5173',
+    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
     methods: ['GET', 'POST']
   }
 })
@@ -34,26 +36,18 @@ const supabaseAdmin = createClient(
 )
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID)
-
 const SALT_ROUNDS = 10
-
 const rooms = {}
 
 app.post('/upload', upload.single('file'), async (req, res) => {
   try {
     const file = req.file
     const fileName = `${Date.now()}-${file.originalname}`
-
     const { error } = await supabaseAdmin.storage
       .from('images')
       .upload(fileName, file.buffer, { contentType: file.mimetype })
-
     if (error) throw error
-
-    const { data } = supabaseAdmin.storage
-      .from('images')
-      .getPublicUrl(fileName)
-
+    const { data } = supabaseAdmin.storage.from('images').getPublicUrl(fileName)
     res.json({ url: data.publicUrl })
   } catch (err) {
     console.error('Upload error:', err)
@@ -61,113 +55,102 @@ app.post('/upload', upload.single('file'), async (req, res) => {
   }
 })
 
-// User Signup
+// Signup
 app.post('/auth/signup', async (req, res) => {
   try {
-    const { email, password } = req.body
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password required' })
+    const { email, password, username } = req.body
+    if (!email || !password || !username) {
+      return res.status(400).json({ error: 'Email, password and username required' })
     }
 
-    // Check if user already exists
-    const { data: existing } = await supabase
+    // Check username taken
+    const { data: existingUsername } = await supabase
       .from('users')
-      .select('*')
+      .select('id')
+      .eq('username', username)
+      .single()
+    if (existingUsername) {
+      return res.status(400).json({ error: 'Username already taken' })
+    }
+
+    // Check email taken
+    const { data: existingEmail } = await supabase
+      .from('users')
+      .select('id')
       .eq('email', email)
       .single()
-
-    if (existing) {
+    if (existingEmail) {
       return res.status(400).json({ error: 'Email already registered' })
     }
 
-    // Hash password
     const passwordHash = await bcrypt.hash(password, SALT_ROUNDS)
-
-    // Create user
     const { data: user, error } = await supabase
       .from('users')
-      .insert({ email, password_hash: passwordHash })
+      .insert({ email, password_hash: passwordHash, username })
       .select()
       .single()
-
     if (error) throw error
 
-    // Generate JWT token
     const token = jwt.sign(
-      { userId: user.id, email: user.email },
+      { userId: user.id, email: user.email, username: user.username },
       process.env.JWT_SECRET,
       { expiresIn: '30d' }
     )
-
-    res.json({ token, userId: user.id, email: user.email })
+    res.json({ token, userId: user.id, email: user.email, username: user.username })
   } catch (err) {
     console.error('Signup error:', err)
     res.status(500).json({ error: err.message })
   }
 })
 
-// User Login
 app.post('/auth/login', async (req, res) => {
   try {
-    const { email, password } = req.body
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password required' })
+    const { username, password } = req.body
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password required' })
     }
 
-    // Find user
     const { data: user, error } = await supabase
       .from('users')
       .select('*')
-      .eq('email', email)
+      .eq('username', username.toLowerCase())
       .single()
 
     if (error || !user) {
-      return res.status(401).json({ error: 'Invalid email or password' })
+      return res.status(401).json({ error: 'Invalid username or password' })
     }
 
-    // Check password
     const isValid = await bcrypt.compare(password, user.password_hash)
     if (!isValid) {
-      return res.status(401).json({ error: 'Invalid email or password' })
+      return res.status(401).json({ error: 'Invalid username or password' })
     }
 
-    // Generate JWT token
     const token = jwt.sign(
-      { userId: user.id, email: user.email },
+      { userId: user.id, email: user.email, username: user.username },
       process.env.JWT_SECRET,
       { expiresIn: '30d' }
     )
-
-    res.json({ token, userId: user.id, email: user.email })
+    res.json({ token, userId: user.id, email: user.email, username: user.username })
   } catch (err) {
     console.error('Login error:', err)
     res.status(500).json({ error: err.message })
   }
 })
 
-// Google OAuth Login
+// Google Login
 app.post('/auth/google-login', async (req, res) => {
   try {
     const { token } = req.body
-    if (!token) {
-      return res.status(400).json({ error: 'Google token required' })
-    }
+    if (!token) return res.status(400).json({ error: 'Google token required' })
 
-    // Verify Google token
     const ticket = await googleClient.verifyIdToken({
       idToken: token,
       audience: process.env.GOOGLE_CLIENT_ID
     })
-
     const payload = ticket.getPayload()
     const email = payload.email
-    const googleId = payload.sub
+    if (!email) return res.status(400).json({ error: 'Email not provided by Google' })
 
-    if (!email) {
-      return res.status(400).json({ error: 'Email not provided by Google' })
-    }
-
-    // Find or create user
     let { data: user, error } = await supabase
       .from('users')
       .select('*')
@@ -175,38 +158,47 @@ app.post('/auth/google-login', async (req, res) => {
       .single()
 
     if (error && error.code === 'PGRST116') {
-      // User doesn't exist, create new one
+      // Auto-generate a username from email for Google users
+      const baseUsername = email.split('@')[0].toLowerCase().replace(/[^a-z0-9_]/g, '')
+      let username = baseUsername
+      let suffix = 1
+      while (true) {
+        const { data: taken } = await supabase
+          .from('users')
+          .select('id')
+          .eq('username', username)
+          .single()
+        if (!taken) break
+        username = `${baseUsername}${suffix++}`
+      }
+
       const { data: newUser, error: insertError } = await supabase
         .from('users')
-        .insert({ email, password_hash: 'google_oauth' })
+        .insert({ email, password_hash: 'google_oauth', username })
         .select()
         .single()
-
       if (insertError) throw insertError
       user = newUser
     } else if (error) {
       throw error
     }
 
-    // Generate JWT token
     const jwtToken = jwt.sign(
-      { userId: user.id, email: user.email },
+      { userId: user.id, email: user.email, username: user.username },
       process.env.JWT_SECRET,
       { expiresIn: '30d' }
     )
-
-    res.json({ token: jwtToken, userId: user.id, email: user.email })
+    res.json({ token: jwtToken, userId: user.id, email: user.email, username: user.username })
   } catch (err) {
     console.error('Google login error:', err)
     res.status(500).json({ error: err.message })
   }
 })
 
-// Middleware to verify JWT
+// Verify JWT middleware
 const verifyToken = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1]
   if (!token) return res.status(401).json({ error: 'Token required' })
-
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET)
     req.user = decoded
@@ -216,14 +208,30 @@ const verifyToken = (req, res, next) => {
   }
 }
 
-// Create new room
+// Search users by username
+app.get('/users/search', verifyToken, async (req, res) => {
+  try {
+    const { username } = req.query
+    if (!username) return res.status(400).json({ error: 'Username required' })
+
+    const { data, error } = await supabase
+      .from('users')
+      .select('id, email, username')
+      .ilike('username', `%${username}%`)
+      .neq('id', req.user.userId)
+      .limit(10)
+
+    if (error) throw error
+    res.json(data)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Create room
 app.post('/rooms/create', verifyToken, async (req, res) => {
-  console.log('rooms/create hit, user:', req.user) 
   try {
     const userId = req.user.userId
-    console.log('userId:', userId) 
-
-    // Generate unique room code
     let roomCode
     let roomExists = true
     while (roomExists) {
@@ -236,16 +244,13 @@ app.post('/rooms/create', verifyToken, async (req, res) => {
       roomExists = !!data
     }
 
-    // Create room
     const { data: room, error } = await supabase
       .from('rooms')
       .insert({ room_code: roomCode, owner_id: userId })
       .select()
       .single()
-
     if (error) throw error
 
-    // Add owner to room_members
     await supabase
       .from('room_members')
       .insert({ room_id: room.id, user_id: userId })
@@ -257,54 +262,38 @@ app.post('/rooms/create', verifyToken, async (req, res) => {
   }
 })
 
-// Join existing room
+// Join room
 app.post('/rooms/join', verifyToken, async (req, res) => {
   try {
     const { roomCode } = req.body
     const userId = req.user.userId
-
     if (!roomCode) return res.status(400).json({ error: 'Room code required' })
 
-    // Find room by code
     const { data: room, error } = await supabase
       .from('rooms')
       .select('*')
       .eq('room_code', roomCode.toUpperCase())
       .single()
+    if (error || !room) return res.status(404).json({ error: 'Room not found' })
 
-    if (error || !room) {
-      return res.status(404).json({ error: 'Room not found' })
-    }
-
-    // Check if room already has 2 members (1-on-1)
     const { data: members, error: memberError } = await supabase
       .from('room_members')
       .select('id')
       .eq('room_id', room.id)
-
     if (memberError) throw memberError
+    if (members.length >= 2) return res.status(400).json({ error: 'Room is full' })
 
-    if (members.length >= 2) {
-      return res.status(400).json({ error: 'Room is full (max 2 members)' })
-    }
-
-    // Check if user already in room
     const { data: existing } = await supabase
       .from('room_members')
       .select('id')
       .eq('room_id', room.id)
       .eq('user_id', userId)
       .single()
+    if (existing) return res.status(400).json({ error: 'Already joined this room' })
 
-    if (existing) {
-      return res.status(400).json({ error: 'Already joined this room' })
-    }
-
-    // Add user to room_members
     const { error: joinError } = await supabase
       .from('room_members')
       .insert({ room_id: room.id, user_id: userId })
-
     if (joinError) throw joinError
 
     res.json({ roomId: room.id, roomCode: room.room_code })
@@ -314,16 +303,28 @@ app.post('/rooms/join', verifyToken, async (req, res) => {
   }
 })
 
+// Get my rooms
+app.get('/rooms/mine', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.userId
+    const { data, error } = await supabase
+      .from('room_members')
+      .select('room_id, rooms(id, room_code, created_at)')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+    if (error) throw error
+    res.json(data.map(d => d.rooms))
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 io.on('connection', (socket) => {
   console.log('connected:', socket.id)
 
   socket.on('join-room', async (roomId, token) => {
     try {
-      // Verify JWT token
-      if (!token) {
-        socket.emit('auth-error', 'Token required')
-        return
-      }
+      if (!token) { socket.emit('auth-error', 'Token required'); return }
 
       let userId
       try {
@@ -334,107 +335,64 @@ io.on('connection', (socket) => {
         return
       }
 
-      // Verify user is a member of this room
       const { data: membership, error: memberError } = await supabase
         .from('room_members')
         .select('*')
         .eq('room_id', roomId)
         .eq('user_id', userId)
         .single()
-
       if (memberError || !membership) {
         socket.emit('auth-error', 'Not a member of this room')
         return
       }
 
-      // Initialize room tracking if needed
-      if (!rooms[roomId]) {
-        rooms[roomId] = { members: [], users: {} }
-      }
-
+      if (!rooms[roomId]) rooms[roomId] = { members: [], users: {} }
       const room = rooms[roomId]
-
-      // If socket already connected, skip
       if (room.members.includes(socket.id)) return
 
-      // Add socket to room tracking
       room.members.push(socket.id)
       room.users[socket.id] = userId
       socket.join(roomId)
       socket.data.roomId = roomId
       socket.data.userId = userId
 
-      console.log(`${socket.id} joined room ${roomId} (${room.members.length}/2)`)
-
-      // Load only SENT elements from the database
       const { data, error } = await supabase
         .from('elements')
         .select('*')
         .eq('room_id', roomId)
-        .eq('sent', true) // only load committed elements
+        .eq('sent', true)
         .order('created_at', { ascending: true })
 
-      if (error) {
-        console.error('Error loading canvas:', error)
-        socket.emit('canvas-state', [])
-      } else {
-        socket.emit('canvas-state', data.map(row => row.data))
-      }
-
-      // If second user joined, notify both
-      if (room.members.length === 2) {
-        io.to(roomId).emit('partner-joined')
-      }
+      socket.emit('canvas-state', error ? [] : data.map(row => row.data))
+      if (room.members.length === 2) io.to(roomId).emit('partner-joined')
     } catch (err) {
-      console.error('Join room error:', err)
       socket.emit('auth-error', err.message)
     }
   })
 
-  // Save draft element to DB (not sent yet — only visible to sender)
   socket.on('save-draft', async ({ roomId, element }) => {
-    await supabase
-      .from('elements')
-      .insert({
-        id: element.id,
-        room_id: roomId,
-        type: element.type,
-        data: element,
-        sent: false, // draft, not yet sent
-      })
+    await supabase.from('elements').insert({
+      id: element.id,
+      room_id: roomId,
+      type: element.type,
+      data: element,
+      sent: false,
+    })
   })
 
-  // Send all drafts — mark them as sent and broadcast to partner
   socket.on('send-drafts', async ({ roomId, elements }) => {
-    // Mark all these elements as sent in DB
     const ids = elements.map(el => el.id)
-
-    await supabase
-      .from('elements')
-      .update({ sent: true })
-      .in('id', ids)
-
-    // Broadcast all sent elements to partner at once
+    await supabase.from('elements').update({ sent: true }).in('id', ids)
     socket.to(roomId).emit('elements-received', elements)
   })
 
   socket.on('disconnect', () => {
     const roomId = socket.data.roomId
     if (!roomId || !rooms[roomId]) return
-    
     rooms[roomId].members = rooms[roomId].members.filter(id => id !== socket.id)
-    console.log(`${socket.id} left room ${roomId} (${rooms[roomId].members.length}/2)`)
-    
-    // Notify remaining partner
     socket.to(roomId).emit('partner-left')
-    
-    // Clean up empty rooms
-    if (rooms[roomId].members.length === 0) {
-      delete rooms[roomId]
-    }
+    if (rooms[roomId].members.length === 0) delete rooms[roomId]
   })
 })
 
-server.listen(3001, () => {
-  console.log('Scrawl server running on http://localhost:3001')
-})
+server.listen(3001, () => console.log('Scrawl server running on http://localhost:3001'))

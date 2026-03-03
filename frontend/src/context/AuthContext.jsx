@@ -8,7 +8,6 @@ export function AuthProvider({ children }) {
   const [token, setToken] = useState(null)
   const [loading, setLoading] = useState(true)
 
-  // Load from localStorage on mount
   useEffect(() => {
     const savedToken = localStorage.getItem('token')
     const savedUser = localStorage.getItem('user')
@@ -19,34 +18,36 @@ export function AuthProvider({ children }) {
     setLoading(false)
   }, [])
 
-  const signup = async (email, password) => {
+  const saveAuth = (data) => {
+    const userData = { userId: data.userId, email: data.email, username: data.username }
+    setToken(data.token)
+    setUser(userData)
+    localStorage.setItem('token', data.token)
+    localStorage.setItem('user', JSON.stringify(userData))
+  }
+
+  const signup = async (email, password, username) => {
     const response = await fetch(`${BACKEND_URL}/auth/signup`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
+      body: JSON.stringify({ email, password, username })
     })
     const data = await response.json()
     if (!response.ok) throw new Error(data.error)
-
-    // Don't auto-login on signup - just return success
     return data
   }
 
-  const login = async (email, password) => {
-    const response = await fetch(`${BACKEND_URL}/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
-    })
-    const data = await response.json()
-    if (!response.ok) throw new Error(data.error)
-
-    setToken(data.token)
-    setUser({ userId: data.userId, email: data.email })
-    localStorage.setItem('token', data.token)
-    localStorage.setItem('user', JSON.stringify({ userId: data.userId, email: data.email }))
-    return data
-  }
+const login = async (username, password) => {
+  const response = await fetch(`${BACKEND_URL}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password })
+  })
+  const data = await response.json()
+  if (!response.ok) throw new Error(data.error)
+  saveAuth(data)
+  return data
+}
 
   const googleLogin = async (credentialResponse) => {
     const response = await fetch(`${BACKEND_URL}/auth/google-login`, {
@@ -56,11 +57,7 @@ export function AuthProvider({ children }) {
     })
     const data = await response.json()
     if (!response.ok) throw new Error(data.error)
-
-    setToken(data.token)
-    setUser({ userId: data.userId, email: data.email })
-    localStorage.setItem('token', data.token)
-    localStorage.setItem('user', JSON.stringify({ userId: data.userId, email: data.email }))
+    saveAuth(data)
     return data
   }
 

@@ -113,14 +113,10 @@ function Home() {
       </p>
 
       {user && (
-        <p style={{
-          fontSize: 13,
-          color: '#999',
-          fontFamily: 'Georgia, serif',
-        }}>
-          logged in as <strong>{user.email}</strong>
-        </p>
-      )}
+  <p style={{ fontSize: 13, color: '#999', fontFamily: 'Georgia, serif' }}>
+    logged in as <strong>@{user.username || user.email}</strong>
+  </p>
+)}
 
       <div style={{ display: 'flex', gap: 16, marginTop: 16 }}>
         <button
