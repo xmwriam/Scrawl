@@ -1,11 +1,18 @@
 * {
+  box-sizing: border-box;
   margin: 0;
   padding: 0;
-  box-sizing: border-box;
 }
 
 body {
+  font-family: 'Lora', Georgia, serif;
+  background: #faf6f0;
+  color: #2c2410;
   overflow: hidden;
-  background: #faf9f6;
-  font-family: sans-serif;
 }
+
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #e0d5c5; border-radius: 4px; }
+
+input, button, textarea { font-family: 'Nunito', sans-serif; }

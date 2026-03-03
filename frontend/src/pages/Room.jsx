@@ -1,6 +1,6 @@
-import { Stage, Layer, Rect, Line, Text, Image as KonvaImage, Circle, Arrow, Transformer } from 'react-konva'
+import { Stage, Layer, Rect, Line, Text, Image as KonvaImage } from 'react-konva'
 import { useRef, useState, useEffect, useContext, useCallback } from 'react'
-import { useParams, useNavigate, useLocation } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 import { io } from 'socket.io-client'
 import { AuthContext } from '../context/AuthContext'
 import rough from 'roughjs'
@@ -10,18 +10,29 @@ const CANVAS_WIDTH = window.innerWidth
 const CANVAS_HEIGHT = 10000
 
 const ROUGH_OPTIONS = {
-  roughness: 1.5,
-  strokeWidth: 2,
-  bowing: 1,
+  roughness: 2,
+  strokeWidth: 1.5,
+  bowing: 1.5,
 }
 
+const COLORS = [
+  '#2c2410', '#8b5e3c', '#6b4a35', '#4a3728',
+  '#c0392b', '#8b3c5e', '#3c5e8b', '#4a6b3c',
+  '#c8a040', '#7c6b3c', '#3c7c6b', '#8b7c3c'
+]
+
+const FILLS = [
+  'transparent', '#fffcf8',
+  '#f5e6d0', '#e0d0b8',
+  '#ffd0c8', '#d0e8d0',
+  '#c8d8f0', '#f0d8e8'
+]
+
 function Room() {
-  const { roomId: paramRoomId } = useParams()
+  const { roomId } = useParams()
   const navigate = useNavigate()
-  const location = useLocation()
   const { token } = useContext(AuthContext)
   const socketRef = useRef(null)
-  const roomId = paramRoomId
 
   const [stagePos, setStagePos] = useState({ x: 0, y: 0 })
   const [scale, setScale] = useState(1)
@@ -31,13 +42,13 @@ function Room() {
   const [currentShape, setCurrentShape] = useState(null)
 
   const [tool, setTool] = useState('draw')
-  const [drawColor, setDrawColor] = useState('#2c2c2c')
+  const [drawColor, setDrawColor] = useState('#2c2410')
   const [brushSize, setBrushSize] = useState(3)
-  const [textColor, setTextColor] = useState('#2c2c2c')
-  const [shapeColor, setShapeColor] = useState('#2c2c2c')
+  const [textColor, setTextColor] = useState('#2c2410')
+  const [shapeColor, setShapeColor] = useState('#2c2410')
   const [fillColor, setFillColor] = useState('transparent')
   const [showColorPicker, setShowColorPicker] = useState(false)
-  const [colorPickerTarget, setColorPickerTarget] = useState('stroke') // 'stroke' | 'fill'
+  const [colorPickerTarget, setColorPickerTarget] = useState('stroke')
 
   const [showStickers, setShowStickers] = useState(false)
   const [textInput, setTextInput] = useState(null)
@@ -47,9 +58,7 @@ function Room() {
   const [selectedId, setSelectedId] = useState(null)
   const [hoveredElementId, setHoveredElementId] = useState(null)
   const [justSent, setJustSent] = useState(false)
-  const [drawWarning, setDrawWarning] = useState('')
 
-  // Undo/redo stacks
   const [undoStack, setUndoStack] = useState([])
   const [redoStack, setRedoStack] = useState([])
 
@@ -99,22 +108,17 @@ function Room() {
     })
   }, [sentElements, draftElements])
 
-  // ── Wheel / scroll ───────────────────────────────────────────────────────────
+  // ── Wheel ────────────────────────────────────────────────────────────────────
 
   useEffect(() => {
     const handleWheel = (e) => {
       e.preventDefault()
       if (e.ctrlKey || e.metaKey) {
-        // Zoom
         const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1
         setScale(prev => Math.min(Math.max(prev * zoomFactor, 0.2), 4))
       } else {
-        // Scroll
         if (isDrawing.current) return
-        setStagePos(prev => ({
-          x: 0,
-          y: Math.min(0, prev.y - e.deltaY)
-        }))
+        setStagePos(prev => ({ x: 0, y: Math.min(0, prev.y - e.deltaY) }))
       }
     }
     window.addEventListener('wheel', handleWheel, { passive: false })
@@ -131,7 +135,7 @@ function Room() {
     return () => container.removeEventListener('contextmenu', prevent)
   }, [])
 
-  // ── Text input focus ─────────────────────────────────────────────────────────
+  // ── Text focus ───────────────────────────────────────────────────────────────
 
   useEffect(() => {
     if (textInput && inputRef.current) {
@@ -139,7 +143,7 @@ function Room() {
     }
   }, [textInput])
 
-  // ── Rough.js canvas setup ────────────────────────────────────────────────────
+  // ── Rough.js setup ───────────────────────────────────────────────────────────
 
   useEffect(() => {
     const canvas = document.createElement('canvas')
@@ -244,7 +248,7 @@ function Room() {
           if (Math.sqrt(dx * dx + dy * dy) < eraseRadius) return false
         }
       }
-      if (el.type === 'text' || el.type === 'shape' || el.type === 'image') {
+      if (['text', 'shape', 'image'].includes(el.type)) {
         const dx = (el.x || 0) - pos.x
         const dy = (el.y || 0) - pos.y
         if (Math.sqrt(dx * dx + dy * dy) < eraseRadius * 3) return false
@@ -258,7 +262,6 @@ function Room() {
   const handleMouseDown = (e) => {
     const isBackground = e.target === e.target.getStage() || e.target.name() === 'background'
     if (isBackground) setSelectedId(null)
-
     if (tool === 'select') return
 
     if (tool === 'text') {
@@ -290,7 +293,6 @@ function Room() {
       return
     }
 
-    // Shape tools
     if (['rect', 'circle', 'arrow', 'line'].includes(tool)) {
       if (!isBackground) return
       isDrawing.current = true
@@ -314,10 +316,7 @@ function Room() {
     if (!isDrawing.current) return
     const pos = getPointerPosition()
 
-    if (tool === 'eraser') {
-      eraseAt(pos)
-      return
-    }
+    if (tool === 'eraser') { eraseAt(pos); return }
 
     if (tool === 'draw' && currentLine) {
       if (lastPoint.current) {
@@ -336,8 +335,7 @@ function Room() {
         ...prev,
         width: pos.x - start.x,
         height: pos.y - start.y,
-        x2: pos.x,
-        y2: pos.y,
+        x2: pos.x, y2: pos.y,
       }))
     }
   }
@@ -375,7 +373,7 @@ function Room() {
         text: value,
         fontSize: 18,
         fill: textColor,
-        fontFamily: 'Georgia, serif',
+        fontFamily: 'Lora, Georgia, serif',
       })
     }
     setTextInput(null)
@@ -403,9 +401,8 @@ function Room() {
   // ── Delete ───────────────────────────────────────────────────────────────────
 
   const deleteElement = (elementId) => {
-    const idx = draftElements.findIndex(el => el.id === elementId)
-    if (idx !== -1) {
-      setDraftElements(prev => prev.filter((_, i) => i !== idx))
+    if (draftElements.find(el => el.id === elementId)) {
+      setDraftElements(prev => prev.filter(el => el.id !== elementId))
       setSelectedId(null)
     }
   }
@@ -454,14 +451,19 @@ function Room() {
   const addSticker = (emoji) => {
     const centerX = (window.innerWidth / 2 - stagePos.x) / scale
     const centerY = (window.innerHeight / 2 - stagePos.y) / scale
-    addDraft({ id: Date.now().toString(), type: 'text', x: centerX, y: centerY, text: emoji, fontSize: 48, fill: '#2c2c2c', fontFamily: 'Arial' })
+    addDraft({
+      id: Date.now().toString(), type: 'text',
+      x: centerX, y: centerY,
+      text: emoji, fontSize: 48,
+      fill: '#2c2410', fontFamily: 'Arial',
+    })
     setShowStickers(false)
   }
 
-  // ── Rough shape rendering ────────────────────────────────────────────────────
+  // ── Rough.js rendering ───────────────────────────────────────────────────────
 
-  const getRoughPoints = (el) => {
-    const key = `${el.id}-${el.x}-${el.y}-${el.width}-${el.height}-${el.x2}-${el.y2}-${el.stroke}-${el.fill}`
+  const getRoughSets = (el) => {
+    const key = `${el.id}-${el.x}-${el.y}-${el.width}-${el.height}-${el.x2}-${el.y2}-${el.stroke}-${el.fill}-${el.strokeWidth}`
     if (roughCache.current[key]) return roughCache.current[key]
 
     const rc = roughCanvasRef.current
@@ -469,7 +471,7 @@ function Room() {
 
     const opts = {
       ...ROUGH_OPTIONS,
-      stroke: el.stroke || '#2c2c2c',
+      stroke: el.stroke || '#2c2410',
       fill: el.fill === 'transparent' ? undefined : el.fill,
       strokeWidth: el.strokeWidth || 2,
     }
@@ -491,69 +493,74 @@ function Room() {
     }
 
     if (!drawable) return []
-
-    const sets = drawable.sets || []
-    const result = sets.map(set => ({
-      type: set.type,
-      ops: set.ops,
-      stroke: el.stroke,
-      fill: el.fill,
-      strokeWidth: el.strokeWidth,
-    }))
-
+    const result = (drawable.sets || []).map(set => ({ type: set.type, ops: set.ops, stroke: el.stroke, fill: el.fill, strokeWidth: el.strokeWidth }))
     roughCache.current[key] = result
     return result
   }
 
-  // Render a rough shape as Konva Lines
+  const opsToPoints = (ops) => {
+    const points = []
+    let cx = 0, cy = 0
+    ops.forEach(op => {
+      if (op.op === 'move') { cx = op.data[0]; cy = op.data[1] }
+      else if (op.op === 'lineTo') {
+        points.push(cx, cy, op.data[0], op.data[1])
+        cx = op.data[0]; cy = op.data[1]
+      } else if (op.op === 'bcurveTo') {
+        const steps = 12
+        let x0 = cx, y0 = cy
+        for (let t = 1; t <= steps; t++) {
+          const s = t / steps, b = 1 - s
+          const nx = b*b*b*x0 + 3*b*b*s*op.data[0] + 3*b*s*s*op.data[2] + s*s*s*op.data[4]
+          const ny = b*b*b*y0 + 3*b*b*s*op.data[1] + 3*b*s*s*op.data[3] + s*s*s*op.data[5]
+          points.push(x0, y0, nx, ny)
+          x0 = nx; y0 = ny
+        }
+        cx = op.data[4]; cy = op.data[5]
+      }
+    })
+    return points
+  }
+
+  // Convert freehand points into a rough-looking line by adding slight wobble
+  const roughifyPoints = (points) => {
+    if (points.length < 4) return points
+    const result = []
+    for (let i = 0; i < points.length - 2; i += 2) {
+      result.push(points[i], points[i + 1])
+      if (i + 2 < points.length) {
+        const wobble = 0.8
+        result.push(
+          (points[i] + points[i + 2]) / 2 + (Math.random() - 0.5) * wobble,
+          (points[i + 1] + points[i + 3]) / 2 + (Math.random() - 0.5) * wobble
+        )
+      }
+    }
+    result.push(points[points.length - 2], points[points.length - 1])
+    return result
+  }
+
   const renderRoughShape = (el, isDraft) => {
-    const sets = getRoughPoints(el)
-    const opacity = isDraft ? 0.6 : getRecencyOpacity(el)
+    const sets = getRoughSets(el)
+    const opacity = isDraft ? 0.65 : getRecencyOpacity(el)
     const isSelected = selectedId === el.id
 
     const lines = sets.map((set, idx) => {
-      const points = []
-      let cx = 0, cy = 0
-      set.ops.forEach(op => {
-        if (op.op === 'move') { cx = op.data[0]; cy = op.data[1] }
-        else if (op.op === 'lineTo') {
-          points.push(cx, cy, op.data[0], op.data[1])
-          cx = op.data[0]; cy = op.data[1]
-        } else if (op.op === 'bcurveTo') {
-          // Approximate bezier with line segments
-          const steps = 10
-          let x0 = cx, y0 = cy
-          for (let t = 1; t <= steps; t++) {
-            const s = t / steps
-            const s2 = s * s, s3 = s2 * s
-            const b = 1 - s
-            const b2 = b * b, b3 = b2 * b
-            const nx = b3 * x0 + 3 * b2 * s * op.data[0] + 3 * b * s2 * op.data[2] + s3 * op.data[4]
-            const ny = b3 * y0 + 3 * b2 * s * op.data[1] + 3 * b * s2 * op.data[3] + s3 * op.data[5]
-            points.push(x0, y0, nx, ny)
-            x0 = nx; y0 = ny
-          }
-          cx = op.data[4]; cy = op.data[5]
-        }
-      })
-
+      const points = opsToPoints(set.ops)
       if (points.length < 4) return null
-
       return (
         <Line
           key={`${el.id}-set-${idx}`}
           points={points}
-          stroke={set.type === 'fillSketch' ? (el.fill === 'transparent' ? undefined : el.fill) : el.stroke}
+          stroke={set.type === 'fillSketch' ? (el.fill === 'transparent' ? undefined : el.fill) : (el.stroke || '#2c2410')}
           strokeWidth={set.type === 'fillSketch' ? 1 : (el.strokeWidth || 2)}
           opacity={opacity}
-          lineCap="round"
-          lineJoin="round"
-          tension={0}
+          lineCap="round" lineJoin="round" tension={0}
           listening={idx === 0}
           onClick={idx === 0 ? () => setSelectedId(isSelected ? null : el.id) : undefined}
-          shadowColor={isSelected ? '#f5a623' : undefined}
-          shadowBlur={isSelected ? 16 : 0}
-          shadowOpacity={isSelected ? 0.9 : 0}
+          shadowColor={isSelected ? '#8b5e3c' : undefined}
+          shadowBlur={isSelected ? 12 : 0}
+          shadowOpacity={isSelected ? 0.6 : 0}
           draggable={isDraft && idx === 0}
           onDragEnd={isDraft && idx === 0 ? (e) => {
             const dx = e.target.x(), dy = e.target.y()
@@ -567,24 +574,19 @@ function Room() {
     // Arrow head
     if (el.shapeType === 'arrow' && lines.length > 0) {
       const angle = Math.atan2(el.y2 - el.y, el.x2 - el.x)
-      const headLen = 15
-      const points = [
-        el.x2 - headLen * Math.cos(angle - Math.PI / 7),
-        el.y2 - headLen * Math.sin(angle - Math.PI / 7),
-        el.x2, el.y2,
-        el.x2 - headLen * Math.cos(angle + Math.PI / 7),
-        el.y2 - headLen * Math.sin(angle + Math.PI / 7),
-      ]
+      const headLen = 14
       lines.push(
         <Line
-          key={`${el.id}-arrow-head`}
-          points={points}
-          stroke={el.stroke}
-          strokeWidth={el.strokeWidth || 2}
-          opacity={opacity}
-          lineCap="round"
-          lineJoin="round"
-          listening={false}
+          key={`${el.id}-arrowhead`}
+          points={[
+            el.x2 - headLen * Math.cos(angle - Math.PI / 7),
+            el.y2 - headLen * Math.sin(angle - Math.PI / 7),
+            el.x2, el.y2,
+            el.x2 - headLen * Math.cos(angle + Math.PI / 7),
+            el.y2 - headLen * Math.sin(angle + Math.PI / 7),
+          ]}
+          stroke={el.stroke} strokeWidth={el.strokeWidth || 2}
+          opacity={opacity} lineCap="round" lineJoin="round" listening={false}
         />
       )
     }
@@ -597,13 +599,14 @@ function Room() {
   const renderElement = (el, isDraft = false) => {
     const isSelected = selectedId === el.id
     const isHovered = hoveredElementId === el.id
-    const glowProps = isSelected ? { shadowColor: '#f5a623', shadowBlur: 16, shadowOpacity: 0.9 } : {}
+    const opacity = isDraft ? 0.65 : getRecencyOpacity(el)
+    const glowProps = isSelected ? { shadowColor: '#8b5e3c', shadowBlur: 12, shadowOpacity: 0.6 } : {}
 
-    const commonProps = {
-      key: el.id,
-      onClick: () => setSelectedId(isSelected ? null : el.id),
-      opacity: isDraft ? 0.6 : getRecencyOpacity(el),
-      draggable: isDraft,
+    const commonDragProps = isDraft ? {
+      draggable: true,
+      onMouseEnter: () => setHoveredElementId(el.id),
+      onMouseLeave: () => setHoveredElementId(null),
+    } : {
       onMouseEnter: () => setHoveredElementId(el.id),
       onMouseLeave: () => setHoveredElementId(null),
     }
@@ -611,30 +614,34 @@ function Room() {
     const timestamp = isHovered && el.createdAt ? (
       <Text
         key={`ts-${el.id}`}
-        x={(el.x || el.points?.[0] || 0) + 10}
-        y={(el.y || el.points?.[1] || 0) - 30}
+        x={(el.x || el.points?.[0] || 0) + 8}
+        y={(el.y || el.points?.[1] || 0) - 28}
         text={formatTime(el.createdAt)}
-        fontSize={12} fill="#888" fontFamily="Arial" listening={false}
+        fontSize={11} fill="#b0a090"
+        fontFamily="Nunito, sans-serif" listening={false}
       />
     ) : null
 
-    if (el.type === 'shape') {
-      return renderRoughShape(el, isDraft)
-    }
+    if (el.type === 'shape') return renderRoughShape(el, isDraft)
 
     if (el.type === 'drawing') {
+      // Use stored rough points if available, otherwise roughify on the fly
+      const pts = el.roughPoints || roughifyPoints(el.points)
       return [
         <Line
-          {...commonProps}
-          points={el.points}
-          stroke={el.stroke || '#2c2c2c'}
+          key={el.id}
+          points={pts}
+          stroke={el.stroke || '#2c2410'}
           strokeWidth={el.strokeWidth}
-          tension={0.4} lineCap="round" lineJoin="round"
-          onDragEnd={(e) => {
+          tension={0.3} lineCap="round" lineJoin="round"
+          opacity={opacity}
+          onClick={() => setSelectedId(isSelected ? null : el.id)}
+          {...commonDragProps}
+          onDragEnd={isDraft ? (e) => {
             const dx = e.target.x(), dy = e.target.y()
             handleElementDragEnd(el.id, dx, dy)
             e.target.x(0); e.target.y(0)
-          }}
+          } : undefined}
           {...glowProps}
         />,
         timestamp,
@@ -644,13 +651,17 @@ function Room() {
     if (el.type === 'text') {
       return [
         <Text
-          {...commonProps}
+          key={el.id}
           x={el.x} y={el.y} text={el.text}
-          fontSize={el.fontSize} fill={el.fill || '#2c2c2c'} fontFamily={el.fontFamily}
-          onDragEnd={(e) => {
+          fontSize={el.fontSize} fill={el.fill || '#2c2410'}
+          fontFamily={el.fontFamily}
+          opacity={opacity}
+          onClick={() => setSelectedId(isSelected ? null : el.id)}
+          {...commonDragProps}
+          onDragEnd={isDraft ? (e) => {
             handleElementDragEnd(el.id, e.target.x() - el.x, e.target.y() - el.y)
             e.target.x(el.x); e.target.y(el.y)
-          }}
+          } : undefined}
           {...glowProps}
         />,
         timestamp,
@@ -660,10 +671,13 @@ function Room() {
     if (el.type === 'image' && loadedImages[el.id]) {
       return [
         <KonvaImage
-          {...commonProps}
+          key={el.id}
           x={el.x} y={el.y} width={el.width} height={el.height}
           image={loadedImages[el.id]}
-          onDragEnd={(e) => handleImageDragEnd(el.id, e.target.x(), e.target.y())}
+          opacity={opacity}
+          onClick={() => setSelectedId(isSelected ? null : el.id)}
+          {...commonDragProps}
+          onDragEnd={isDraft ? (e) => handleImageDragEnd(el.id, e.target.x(), e.target.y()) : undefined}
           {...glowProps}
         />,
         timestamp,
@@ -673,31 +687,35 @@ function Room() {
     return null
   }
 
-  // ── Preview shapes ───────────────────────────────────────────────────────────
-
-  const renderCurrentShape = () => {
-    if (!currentShape) return null
-    return renderRoughShape(currentShape, true)
-  }
-
   // ── Cursor ───────────────────────────────────────────────────────────────────
 
   const getCursor = () => {
     if (tool === 'eraser') return 'cell'
     if (tool === 'select') return 'default'
     if (tool === 'text') return 'text'
-    if (['rect', 'circle', 'arrow', 'line'].includes(tool)) return 'crosshair'
     return 'crosshair'
   }
 
-  // ── Color palette ────────────────────────────────────────────────────────────
+  // ── Dot grid background canvas ───────────────────────────────────────────────
 
-  const COLORS = ['#2c2c2c', '#ffffff', '#ff6b6b', '#4ecdc4', '#ffe66d', '#ff006e', '#8e44ad', '#2e86ab', '#a23b72', '#f18f01', '#c73e1d', '#3b1f2b']
-  const FILLS = ['transparent', '#ffffff', '#ff6b6b55', '#4ecdc455', '#ffe66d55', '#ff006e55', '#8e44ad55', '#2e86ab55']
+  const dotGridCanvas = (() => {
+    const c = document.createElement('canvas')
+    c.width = 24; c.height = 24
+    const ctx = c.getContext('2d')
+    ctx.fillStyle = '#faf6f0'
+    ctx.fillRect(0, 0, 24, 24)
+    ctx.beginPath()
+    ctx.arc(12, 12, 1.2, 0, Math.PI * 2)
+    ctx.fillStyle = '#c8b89a'
+    ctx.fill()
+    return c
+  })()
+
+  // ── Tool buttons ─────────────────────────────────────────────────────────────
 
   const toolButtons = [
     { id: 'select', label: '↖ select' },
-    { id: 'draw', label: '✏️ draw' },
+    { id: 'draw', label: '✏ draw' },
     { id: 'rect', label: '▭ rect' },
     { id: 'circle', label: '○ circle' },
     { id: 'arrow', label: '→ arrow' },
@@ -706,6 +724,8 @@ function Room() {
     { id: 'eraser', label: '◻ erase' },
   ]
 
+  // ── Render ───────────────────────────────────────────────────────────────────
+
   return (
     <div
       style={{ position: 'relative', width: '100%', height: '100vh', cursor: getCursor() }}
@@ -713,36 +733,26 @@ function Room() {
       tabIndex={0}
     >
 
-      {drawWarning && (
-        <div style={{
-          position: 'fixed', top: 80, left: '50%', transform: 'translateX(-50%)',
-          background: '#ffefc1', color: '#b26a00', padding: '10px 24px',
-          borderRadius: 10, fontWeight: 600, fontSize: 15, zIndex: 9999,
-          boxShadow: '0 2px 8px rgba(0,0,0,0.08)', fontFamily: 'Georgia, serif',
-        }}>
-          {drawWarning}
-        </div>
-      )}
-
       {/* ── Toolbar ── */}
       <div style={{
         position: 'fixed', top: 16, left: '50%', transform: 'translateX(-50%)',
-        display: 'flex', gap: 4, background: 'white', borderRadius: 14,
-        padding: '6px 10px', boxShadow: '0 2px 16px rgba(0,0,0,0.1)',
-        zIndex: 100, alignItems: 'center', flexWrap: 'wrap', maxWidth: '95vw',
-        fontFamily: 'Georgia, serif',
+        display: 'flex', gap: 3, background: '#fffcf8',
+        borderRadius: 14, padding: '6px 10px', zIndex: 100,
+        alignItems: 'center', flexWrap: 'wrap', maxWidth: '95vw',
+        fontFamily: 'Nunito, sans-serif',
+        boxShadow: '0 2px 16px rgba(44,36,16,0.10), 0 1px 4px rgba(44,36,16,0.06)',
+        border: '1px solid #e8ddd0',
       }}>
 
-        {/* Tool buttons */}
         {toolButtons.map(t => (
           <button
             key={t.id}
             onClick={() => setTool(t.id)}
             style={{
               padding: '5px 10px', borderRadius: 8, border: 'none', cursor: 'pointer',
-              background: tool === t.id ? '#2c2c2c' : '#f5f2ee',
-              color: tool === t.id ? 'white' : '#2c2c2c',
-              fontWeight: 600, fontSize: 13, fontFamily: 'Georgia, serif',
+              background: tool === t.id ? '#2c2410' : '#f5f0e8',
+              color: tool === t.id ? '#faf6f0' : '#6b5040',
+              fontWeight: 700, fontSize: 12, fontFamily: 'Nunito, sans-serif',
               transition: 'all 0.15s',
             }}
           >
@@ -750,26 +760,27 @@ function Room() {
           </button>
         ))}
 
-        <div style={{ width: 1, height: 24, background: '#e0dbd4', margin: '0 2px' }} />
+        <div style={{ width: 1, height: 22, background: '#e8ddd0', margin: '0 2px' }} />
 
         {/* Stroke color */}
         <div style={{ position: 'relative' }}>
           <div
             onClick={() => { setColorPickerTarget('stroke'); setShowColorPicker(p => colorPickerTarget === 'stroke' ? !p : true) }}
             style={{
-              width: 28, height: 28, borderRadius: 6, cursor: 'pointer',
+              width: 26, height: 26, borderRadius: 7, cursor: 'pointer',
               background: tool === 'text' ? textColor : (tool === 'draw' ? drawColor : shapeColor),
-              border: '2px solid #e0dbd4', boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+              border: '2px solid #e8ddd0',
             }}
             title="Stroke color"
           />
           {showColorPicker && colorPickerTarget === 'stroke' && (
             <div style={{
-              position: 'absolute', top: 40, left: 0, background: 'white',
-              borderRadius: 10, padding: 10, boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
-              display: 'flex', flexDirection: 'column', gap: 6, zIndex: 300, width: 160,
+              position: 'absolute', top: 38, left: 0, background: '#fffcf8',
+              borderRadius: 12, padding: 10, zIndex: 300, width: 160,
+              boxShadow: '0 6px 24px rgba(44,36,16,0.12)',
+              border: '1px solid #e8ddd0',
             }}>
-              <p style={{ margin: 0, fontSize: 11, color: '#aaa', fontFamily: 'Georgia, serif' }}>stroke</p>
+              <p style={{ margin: '0 0 7px', fontSize: 10, color: '#b0a090', fontWeight: 700, letterSpacing: 1.5, textTransform: 'uppercase', fontFamily: 'Nunito, sans-serif' }}>stroke</p>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 4 }}>
                 {COLORS.map(color => (
                   <div
@@ -780,10 +791,7 @@ function Room() {
                       else setShapeColor(color)
                       setShowColorPicker(false)
                     }}
-                    style={{
-                      width: 20, height: 20, borderRadius: 4, cursor: 'pointer',
-                      background: color, border: '1.5px solid #e0dbd4',
-                    }}
+                    style={{ width: 20, height: 20, borderRadius: 5, cursor: 'pointer', background: color, border: '1.5px solid #e8ddd0' }}
                   />
                 ))}
               </div>
@@ -791,38 +799,39 @@ function Room() {
           )}
         </div>
 
-        {/* Fill color (shapes only) */}
+        {/* Fill color */}
         {['rect', 'circle'].includes(tool) && (
           <div style={{ position: 'relative' }}>
             <div
               onClick={() => { setColorPickerTarget('fill'); setShowColorPicker(p => colorPickerTarget === 'fill' ? !p : true) }}
               style={{
-                width: 28, height: 28, borderRadius: 6, cursor: 'pointer',
+                width: 26, height: 26, borderRadius: 7, cursor: 'pointer',
                 background: fillColor === 'transparent'
-                  ? 'linear-gradient(135deg, white 40%, #ff6b6b 40%, #ff6b6b 60%, white 60%)'
+                  ? 'linear-gradient(135deg, #fffcf8 40%, #c8a882 40%, #c8a882 60%, #fffcf8 60%)'
                   : fillColor,
-                border: '2px solid #e0dbd4',
+                border: '2px solid #e8ddd0',
               }}
               title="Fill color"
             />
             {showColorPicker && colorPickerTarget === 'fill' && (
               <div style={{
-                position: 'absolute', top: 40, left: 0, background: 'white',
-                borderRadius: 10, padding: 10, boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
-                display: 'flex', flexDirection: 'column', gap: 6, zIndex: 300, width: 160,
+                position: 'absolute', top: 38, left: 0, background: '#fffcf8',
+                borderRadius: 12, padding: 10, zIndex: 300, width: 148,
+                boxShadow: '0 6px 24px rgba(44,36,16,0.12)',
+                border: '1px solid #e8ddd0',
               }}>
-                <p style={{ margin: 0, fontSize: 11, color: '#aaa', fontFamily: 'Georgia, serif' }}>fill</p>
+                <p style={{ margin: '0 0 7px', fontSize: 10, color: '#b0a090', fontWeight: 700, letterSpacing: 1.5, textTransform: 'uppercase', fontFamily: 'Nunito, sans-serif' }}>fill</p>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4 }}>
                   {FILLS.map(color => (
                     <div
                       key={color}
                       onClick={() => { setFillColor(color); setShowColorPicker(false) }}
                       style={{
-                        width: 28, height: 28, borderRadius: 4, cursor: 'pointer',
+                        width: 26, height: 26, borderRadius: 5, cursor: 'pointer',
                         background: color === 'transparent'
-                          ? 'linear-gradient(135deg, white 40%, #ff6b6b 40%, #ff6b6b 60%, white 60%)'
+                          ? 'linear-gradient(135deg, #fffcf8 40%, #c8a882 40%, #c8a882 60%, #fffcf8 60%)'
                           : color,
-                        border: '1.5px solid #e0dbd4',
+                        border: '1.5px solid #e8ddd0',
                       }}
                     />
                   ))}
@@ -834,94 +843,72 @@ function Room() {
 
         {/* Brush size */}
         {['draw', 'rect', 'circle', 'arrow', 'line'].includes(tool) && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#888' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
             <input
               type="range" min="1" max="15" value={brushSize}
               onChange={(e) => setBrushSize(Number(e.target.value))}
-              style={{ width: 60 }}
+              style={{ width: 55, accentColor: '#8b5e3c' }}
             />
-            <span style={{ fontSize: 11, color: '#aaa' }}>{brushSize}px</span>
+            <span style={{ fontSize: 11, color: '#b0a090', fontWeight: 700, minWidth: 24, fontFamily: 'Nunito, sans-serif' }}>{brushSize}</span>
           </div>
         )}
 
-        <div style={{ width: 1, height: 24, background: '#e0dbd4', margin: '0 2px' }} />
+        <div style={{ width: 1, height: 22, background: '#e8ddd0', margin: '0 2px' }} />
 
         {/* Undo / Redo */}
-        <button
-          onClick={undo}
-          disabled={undoStack.length === 0}
+        <button onClick={undo} disabled={undoStack.length === 0}
           style={{
-            padding: '5px 10px', borderRadius: 8, border: 'none', cursor: undoStack.length === 0 ? 'default' : 'pointer',
-            background: '#f5f2ee', color: undoStack.length === 0 ? '#ccc' : '#2c2c2c',
-            fontWeight: 600, fontSize: 13,
-          }}
-          title="Undo (⌘Z)"
-        >
-          ↩
-        </button>
-        <button
-          onClick={redo}
-          disabled={redoStack.length === 0}
+            padding: '5px 8px', borderRadius: 7, border: 'none',
+            cursor: undoStack.length === 0 ? 'default' : 'pointer',
+            background: '#f5f0e8',
+            color: undoStack.length === 0 ? '#d0c0b0' : '#6b5040',
+            fontWeight: 800, fontSize: 14,
+          }} title="Undo (⌘Z)">↩</button>
+        <button onClick={redo} disabled={redoStack.length === 0}
           style={{
-            padding: '5px 10px', borderRadius: 8, border: 'none', cursor: redoStack.length === 0 ? 'default' : 'pointer',
-            background: '#f5f2ee', color: redoStack.length === 0 ? '#ccc' : '#2c2c2c',
-            fontWeight: 600, fontSize: 13,
-          }}
-          title="Redo (⌘Y)"
-        >
-          ↪
-        </button>
+            padding: '5px 8px', borderRadius: 7, border: 'none',
+            cursor: redoStack.length === 0 ? 'default' : 'pointer',
+            background: '#f5f0e8',
+            color: redoStack.length === 0 ? '#d0c0b0' : '#6b5040',
+            fontWeight: 800, fontSize: 14,
+          }} title="Redo (⌘Y)">↪</button>
 
-        <div style={{ width: 1, height: 24, background: '#e0dbd4', margin: '0 2px' }} />
+        <div style={{ width: 1, height: 22, background: '#e8ddd0', margin: '0 2px' }} />
 
         {/* Zoom */}
-        <button
-          onClick={() => setScale(prev => Math.min(prev * 1.2, 4))}
-          style={{ padding: '5px 8px', borderRadius: 8, border: 'none', cursor: 'pointer', background: '#f5f2ee', fontSize: 13 }}
-        >+</button>
-        <span style={{ fontSize: 12, color: '#888', minWidth: 36, textAlign: 'center' }}>
+        <button onClick={() => setScale(prev => Math.min(prev * 1.2, 4))}
+          style={{ padding: '4px 8px', borderRadius: 7, border: 'none', cursor: 'pointer', background: '#f5f0e8', color: '#6b5040', fontWeight: 800, fontSize: 13 }}>+</button>
+        <span style={{ fontSize: 11, color: '#b0a090', minWidth: 34, textAlign: 'center', fontWeight: 700, fontFamily: 'Nunito, sans-serif' }}>
           {Math.round(scale * 100)}%
         </span>
-        <button
-          onClick={() => setScale(prev => Math.max(prev * 0.8, 0.2))}
-          style={{ padding: '5px 8px', borderRadius: 8, border: 'none', cursor: 'pointer', background: '#f5f2ee', fontSize: 13 }}
-        >−</button>
+        <button onClick={() => setScale(prev => Math.max(prev * 0.8, 0.2))}
+          style={{ padding: '4px 8px', borderRadius: 7, border: 'none', cursor: 'pointer', background: '#f5f0e8', color: '#6b5040', fontWeight: 800, fontSize: 13 }}>−</button>
 
-        <div style={{ width: 1, height: 24, background: '#e0dbd4', margin: '0 2px' }} />
+        <div style={{ width: 1, height: 22, background: '#e8ddd0', margin: '0 2px' }} />
 
         {/* Image */}
-        <button
-          onClick={() => fileInputRef.current.click()}
-          disabled={uploadingImage}
-          style={{
-            padding: '5px 10px', borderRadius: 8, border: 'none', cursor: 'pointer',
-            background: '#f5f2ee', color: '#2c2c2c', fontWeight: 600, fontSize: 13,
-            opacity: uploadingImage ? 0.6 : 1,
-          }}
-        >
-          {uploadingImage ? '...' : '🖼️'}
+        <button onClick={() => fileInputRef.current.click()} disabled={uploadingImage}
+          style={{ padding: '5px 9px', borderRadius: 7, border: 'none', cursor: 'pointer', background: '#f5f0e8', fontSize: 14, opacity: uploadingImage ? 0.5 : 1 }}>
+          🖼️
         </button>
 
         {/* Stickers */}
         <div style={{ position: 'relative' }}>
-          <button
-            onClick={() => setShowStickers(!showStickers)}
-            style={{ padding: '5px 10px', borderRadius: 8, border: 'none', cursor: 'pointer', background: '#f5f2ee', fontSize: 13 }}
-          >
-            ⭐
+          <button onClick={() => setShowStickers(!showStickers)}
+            style={{ padding: '5px 9px', borderRadius: 7, border: 'none', cursor: 'pointer', background: showStickers ? '#2c2410' : '#f5f0e8', fontSize: 14, color: showStickers ? '#faf6f0' : 'inherit' }}>
+            ✦
           </button>
           {showStickers && (
             <div style={{
-              position: 'absolute', top: 44, right: 0, background: 'white',
-              borderRadius: 10, padding: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
-              display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4, width: 148, zIndex: 200,
+              position: 'absolute', top: 42, right: 0, background: '#fffcf8',
+              borderRadius: 12, padding: 8,
+              boxShadow: '0 6px 24px rgba(44,36,16,0.12)',
+              border: '1px solid #e8ddd0',
+              display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 3, width: 144, zIndex: 200,
             }}>
               {stickers.map((emoji, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => addSticker(emoji)}
-                  style={{ fontSize: 22, border: 'none', background: '#f5f2ee', borderRadius: 6, cursor: 'pointer', padding: 6 }}
-                >
+                <button key={idx} onClick={() => addSticker(emoji)}
+                  style={{ fontSize: 20, border: 'none', background: '#f5f0e8', borderRadius: 7, cursor: 'pointer', padding: 5 }}>
                   {emoji}
                 </button>
               ))}
@@ -929,41 +916,46 @@ function Room() {
           )}
         </div>
 
-        <div style={{ width: 1, height: 24, background: '#e0dbd4', margin: '0 2px' }} />
+        <div style={{ width: 1, height: 22, background: '#e8ddd0', margin: '0 2px' }} />
 
         {/* Delete selected */}
         {selectedId && draftElements.find(el => el.id === selectedId) && (
-          <button
-            onClick={() => deleteElement(selectedId)}
+          <button onClick={() => deleteElement(selectedId)}
             style={{
-              padding: '5px 10px', borderRadius: 8, border: 'none', cursor: 'pointer',
-              background: '#ff6b6b', color: 'white', fontWeight: 600, fontSize: 13,
-            }}
-          >
+              padding: '5px 10px', borderRadius: 7, border: 'none', cursor: 'pointer',
+              background: '#f0e0d0', color: '#8b3c3c',
+              fontWeight: 800, fontSize: 12, fontFamily: 'Nunito, sans-serif',
+            }}>
             delete
           </button>
         )}
 
-        <div style={{ width: 1, height: 24, background: '#e0dbd4', margin: '0 2px' }} />
+        <div style={{ width: 1, height: 22, background: '#e8ddd0', margin: '0 2px' }} />
 
         {/* Partner status */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#888' }}>
-          <div style={{ width: 7, height: 7, borderRadius: '50%', background: partnerOnline ? '#4caf50' : '#ccc' }} />
-          {partnerOnline ? 'online' : 'offline'}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+          <div style={{
+            width: 7, height: 7, borderRadius: '50%',
+            background: partnerOnline ? '#6b8b5e' : '#d0c0b0',
+          }} />
+          <span style={{ color: partnerOnline ? '#6b8b5e' : '#c0b0a0', fontWeight: 700, fontFamily: 'Nunito, sans-serif', fontSize: 11 }}>
+            {partnerOnline ? 'online' : 'offline'}
+          </span>
         </div>
 
-        <div style={{ width: 1, height: 24, background: '#e0dbd4', margin: '0 2px' }} />
+        <div style={{ width: 1, height: 22, background: '#e8ddd0', margin: '0 2px' }} />
 
         {/* Send */}
         <button
-          onClick={handleSend}
-          disabled={draftElements.length === 0}
+          onClick={handleSend} disabled={draftElements.length === 0}
           style={{
-            padding: '5px 16px', borderRadius: 8, border: 'none',
+            padding: '5px 14px', borderRadius: 8,
+            border: draftElements.length > 0 ? '1.5px solid #2c2410' : '1.5px solid #e8ddd0',
             cursor: draftElements.length === 0 ? 'default' : 'pointer',
-            background: justSent ? '#4caf50' : draftElements.length === 0 ? '#f0f0f0' : '#2c2c2c',
-            color: justSent || draftElements.length > 0 ? 'white' : '#aaa',
-            fontWeight: 700, fontSize: 13, transition: 'all 0.3s', fontFamily: 'Georgia, serif',
+            background: justSent ? '#4a7c4e' : draftElements.length === 0 ? '#f5f0e8' : '#2c2410',
+            color: draftElements.length === 0 && !justSent ? '#c0b0a0' : '#faf6f0',
+            fontWeight: 800, fontSize: 12, transition: 'all 0.3s',
+            fontFamily: 'Nunito, sans-serif', letterSpacing: 0.3,
           }}
         >
           {justSent ? '✓ sent' : `send${draftElements.length > 0 ? ` (${draftElements.length})` : ''}`}
@@ -972,6 +964,7 @@ function Room() {
 
       <input ref={fileInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleImageUpload} />
 
+      {/* Text input overlay */}
       {textInput && (
         <input
           ref={inputRef}
@@ -981,13 +974,15 @@ function Room() {
             position: 'absolute',
             left: textInput.screenX, top: textInput.screenY,
             background: 'transparent', border: 'none',
-            borderBottom: '1.5px solid #aaa', outline: 'none',
-            fontSize: 18 * scale, fontFamily: 'Georgia, serif',
+            borderBottom: '1.5px solid #8b5e3c', outline: 'none',
+            fontSize: 18 * scale,
+            fontFamily: 'Lora, Georgia, serif',
             color: textColor, minWidth: 120, zIndex: 200,
           }}
         />
       )}
 
+      {/* Canvas */}
       <Stage
         ref={stageRef}
         width={window.innerWidth}
@@ -1001,24 +996,29 @@ function Room() {
         onMouseUp={handleMouseUp}
       >
         <Layer>
+          {/* Dot grid background */}
           <Rect
             name="background"
             x={0} y={0}
-            width={CANVAS_WIDTH / scale}
+            width={CANVAS_WIDTH / scale + 200}
             height={CANVAS_HEIGHT}
-            fill="#faf9f6"
+            fillPatternImage={dotGridCanvas}
           />
 
           {sentElements.map(el => renderElement(el, false)).flat().filter(Boolean)}
           {draftElements.map(el => renderElement(el, true)).flat().filter(Boolean)}
-          {renderCurrentShape()}
 
+          {/* Current shape preview */}
+          {currentShape && renderRoughShape(currentShape, true)}
+
+          {/* Current freehand line preview */}
           {currentLine && (
             <Line
               points={currentLine.points}
               stroke={currentLine.stroke}
               strokeWidth={currentLine.strokeWidth}
-              tension={0.4} lineCap="round" lineJoin="round"
+              tension={0.3} lineCap="round" lineJoin="round"
+              opacity={0.65}
             />
           )}
         </Layer>
