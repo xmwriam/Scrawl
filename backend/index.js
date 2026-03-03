@@ -49,6 +49,22 @@ app.post('/upload', upload.single('file'), async (req, res) => {
   }
 })
 
+app.post('/upload-audio', upload.single('file'), async (req, res) => {
+  try {
+    const file = req.file
+    const fileName = `${Date.now()}-${file.originalname}`
+    const { error } = await supabaseAdmin.storage
+      .from('audio')
+      .upload(fileName, file.buffer, { contentType: file.mimetype })
+    if (error) throw error
+    const { data } = supabaseAdmin.storage.from('audio').getPublicUrl(fileName)
+    res.json({ url: data.publicUrl })
+  } catch (err) {
+    console.error('Audio upload error:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
 app.post('/auth/signup', async (req, res) => {
@@ -386,6 +402,37 @@ app.get('/groups/:groupId/members', verifyToken, async (req, res) => {
   }
 })
 
+app.get('/rooms/:roomId/last-seen', verifyToken, async (req, res) => {
+  try {
+    const { roomId } = req.params
+    const userId = req.user.userId
+    const { data, error } = await supabase
+      .from('room_last_seen')
+      .select('last_seen')
+      .eq('room_id', roomId)
+      .eq('user_id', userId)
+      .single()
+    if (error) return res.json({ last_seen: null })
+    res.json({ last_seen: data.last_seen })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/rooms/:roomId/mark-seen', verifyToken, async (req, res) => {
+  try {
+    const { roomId } = req.params
+    const userId = req.user.userId
+    await supabase
+      .from('room_last_seen')
+      .upsert({ room_id: roomId, user_id: userId, last_seen: new Date().toISOString() },
+        { onConflict: 'room_id,user_id' })
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // ─── Socket.io ────────────────────────────────────────────────────────────────
 
 io.on('connection', (socket) => {
@@ -441,11 +488,14 @@ io.on('connection', (socket) => {
     })
   })
 
-  socket.on('send-drafts', async ({ roomId, elements }) => {
-    const ids = elements.map(el => el.id)
-    await supabase.from('elements').update({ sent: true }).in('id', ids)
-    socket.to(roomId).emit('elements-received', elements)
-  })
+socket.on('send-drafts', async ({ roomId, elements }) => {
+  const ids = elements.map(el => el.id)
+  await supabase.from('elements').update({
+    sent: true,
+    sent_by_username: elements[0]?.sentByUsername || null,
+  }).in('id', ids)
+  socket.to(roomId).emit('elements-received', elements)
+})
 
   socket.on('disconnect', () => {
     const roomId = socket.data.roomId

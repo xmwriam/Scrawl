@@ -36,6 +36,19 @@ function Home() {
   const [groupMembers, setGroupMembers] = useState([])
   const [searchingGroupMember, setSearchingGroupMember] = useState(false)
   const [creatingGroup, setCreatingGroup] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768)
+
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < 768)
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
+  // Close sidebar when navigating to a room on mobile
+  useEffect(() => {
+    if (isMobile && roomId) setSidebarOpen(false)
+  }, [roomId, isMobile])
 
   useEffect(() => {
     if (!token) return
@@ -172,14 +185,52 @@ function Home() {
       display: 'flex', height: '100vh',
       fontFamily: 'Lora, Georgia, serif',
       background: '#faf6f0',
+      position: 'relative',
     }}>
+
+      {/* ── Mobile overlay ── */}
+      {isMobile && sidebarOpen && (
+        <div
+          onClick={() => setSidebarOpen(false)}
+          style={{
+            position: 'fixed', inset: 0,
+            background: 'rgba(44,36,16,0.3)',
+            zIndex: 40,
+          }}
+        />
+      )}
+
+      {/* ── Mobile hamburger ── */}
+      {isMobile && (
+        <button
+          onClick={() => setSidebarOpen(!sidebarOpen)}
+          style={{
+            position: 'fixed', top: 12, left: 12, zIndex: 60,
+            width: 38, height: 38, borderRadius: 10,
+            border: '1px solid #e8ddd0', background: '#fffcf8',
+            cursor: 'pointer', fontSize: 16,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            boxShadow: '0 2px 8px rgba(44,36,16,0.08)',
+          }}
+        >
+          {sidebarOpen ? '✕' : '☰'}
+        </button>
+      )}
 
       {/* ── Sidebar ── */}
       <div style={{
-        width: 280, minWidth: 280, height: '100vh',
+        width: isMobile ? '80vw' : 280,
+        minWidth: isMobile ? 'unset' : 280,
+        height: '100vh',
         background: '#fffcf8',
         borderRight: '1px solid #e8ddd0',
-        display: 'flex', flexDirection: 'column',
+        display: 'flex',
+        flexDirection: 'column',
+        position: isMobile ? 'fixed' : 'relative',
+        left: 0, top: 0, zIndex: 50,
+        transform: isMobile && !sidebarOpen ? 'translateX(-100%)' : 'translateX(0)',
+        transition: 'transform 0.3s ease',
+        boxShadow: isMobile && sidebarOpen ? '4px 0 24px rgba(44,36,16,0.15)' : 'none',
       }}>
 
         {/* Header */}
@@ -189,7 +240,6 @@ function Home() {
           background: '#fffcf8',
           position: 'relative',
         }}>
-          {/* Ruled lines decoration */}
           {[0,1,2].map(i => (
             <div key={i} style={{
               position: 'absolute', left: 0, right: 0,
@@ -250,9 +300,7 @@ function Home() {
               {/* Tabs */}
               <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
                 {['direct', 'group'].map(tab => (
-                  <button
-                    key={tab}
-                    onClick={() => setNewChatTab(tab)}
+                  <button key={tab} onClick={() => setNewChatTab(tab)}
                     style={{
                       flex: 1, padding: '6px 0', borderRadius: 7,
                       border: '1px solid #e8ddd0',
@@ -285,8 +333,7 @@ function Home() {
                   {!searching && searchResults.length > 0 && (
                     <div style={{ marginTop: 6, borderRadius: 8, overflow: 'hidden', border: '1px solid #e8ddd0', background: '#fffcf8' }}>
                       {searchResults.map(u => (
-                        <div
-                          key={u.id} onClick={() => startDirectChat(u)}
+                        <div key={u.id} onClick={() => startDirectChat(u)}
                           style={{
                             padding: '9px 12px', cursor: 'pointer',
                             borderBottom: '1px solid #f0e8dc',
@@ -389,8 +436,7 @@ function Home() {
                     </div>
                   )}
 
-                  <button
-                    onClick={createGroup} disabled={creatingGroup}
+                  <button onClick={createGroup} disabled={creatingGroup}
                     style={{
                       padding: '9px 0', borderRadius: 8,
                       border: '1.5px solid #2c2410',
@@ -455,6 +501,7 @@ function Home() {
                       color: '#faf6f0', flexShrink: 0,
                       fontFamily: 'Nunito, sans-serif',
                       border: isActive ? '2px solid #8b5e3c' : '2px solid transparent',
+                      transition: 'all 0.2s',
                     }}>
                       {isGroup ? '◈' : displayName[0]?.toUpperCase()}
                     </div>
@@ -484,7 +531,12 @@ function Home() {
       </div>
 
       {/* ── Main area ── */}
-      <div style={{ flex: 1, height: '100vh', overflow: 'hidden' }}>
+      <div style={{
+        flex: 1,
+        height: '100vh',
+        overflow: 'hidden',
+        marginLeft: isMobile ? 0 : 0,
+      }}>
         {roomId ? (
           <Room key={roomId} />
         ) : (
@@ -493,7 +545,6 @@ function Home() {
             height: '100%', background: '#faf6f0',
             position: 'relative', overflow: 'hidden',
           }}>
-            {/* Dot grid */}
             <div style={{
               position: 'absolute', inset: 0,
               backgroundImage: 'radial-gradient(circle, #c8b89a 1px, transparent 1px)',
@@ -501,11 +552,15 @@ function Home() {
               opacity: 0.4,
             }} />
             <div style={{ textAlign: 'center', position: 'relative' }}>
+              {isMobile && (
+                <p style={{ fontSize: 12, color: '#b0a090', marginBottom: 16, fontFamily: 'Nunito, sans-serif', fontWeight: 600 }}>
+                  tap ☰ to open your journals
+                </p>
+              )}
               <div style={{ fontSize: 52, marginBottom: 16, opacity: 0.3 }}>✒</div>
               <h2 style={{
                 fontSize: 22, fontWeight: 700, color: '#6b5040',
-                fontFamily: 'Lora, Georgia, serif', margin: 0,
-                fontStyle: 'italic',
+                fontFamily: 'Lora, Georgia, serif', margin: 0, fontStyle: 'italic',
               }}>
                 open a journal
               </h2>
