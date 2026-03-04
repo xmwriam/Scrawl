@@ -12,9 +12,6 @@ const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'
 // On larger viewports it sits centered; on smaller viewports the stage is
 // scaled down so it still fits without any horizontal scrolling.
 const CANVAS_W = 1280
-// Canvas is infinite downward — CANVAS_H just needs to be large enough that
-// the dot-grid background never runs out while scrolling.
-const CANVAS_H = 40000
 const FIXED_OPACITY = 0.72
 const HANDLE_RADIUS = 7
 
@@ -150,11 +147,44 @@ function Room({ onOpenSidebar, sidebarOpen: sidebarIsOpen }) {
   const navigate = useNavigate()
   const { token, user } = useContext(AuthContext)
 
-  // Camera: only vertical scroll in JS. Horizontal is native CSS overflow.
+  // ── Camera ──────────────────────────────────────────────────────────────
+  // stageX/stageY: top-left corner of the viewport in screen pixels.
+  // At scale=1 on a wide desktop, stageX centers the 1280px canvas.
+  // When zoomed in or viewport is narrow, stageX/Y can scroll freely within bounds.
+  const [stageX, setStageX] = useState(0)
   const [stageY, setStageY] = useState(0)
-  const [scale, setScale] = useState(1)
-  // Keep stagePos shape for backward compat with useAudio and other consumers
-  const stagePos = { x: 0, y: stageY }
+  const [scale, setScale]   = useState(1)
+
+  // Compute centering offset — how far from left to center CANVAS_W at current scale
+  const centeredX = () => Math.max(0, (window.innerWidth - CANVAS_W * scale) / 2)
+
+  // Clamp camera so we never scroll past canvas edges.
+  // When canvas fits in viewport: lock to centered position.
+  // When canvas overflows: allow panning within bounds.
+  const clamp = (x, y, sc = scale) => {
+    const cw = CANVAS_W * sc
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+    const cx = cw <= vw
+      ? (vw - cw) / 2          // canvas fits — center it, no horizontal scroll
+      : Math.min(0, Math.max(vw - cw, x))  // canvas overflows — clamp to edges
+    const cy = Math.min(0, y)  // never scroll above top, infinite downward
+    return { x: cx, y: cy }
+  }
+
+  // Initialise centered
+  useEffect(() => {
+    const c = clamp(0, 0, 1)
+    setStageX(c.x)
+    setStageY(c.y)
+    const onResize = () => {
+      setStageX(prev => clamp(prev, stageY).x)
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
+  const stagePos = { x: stageX, y: stageY }
   const [loadedImages, setLoadedImages] = useState({})
   const [textInput, setTextInput] = useState(null)
   // FIX: separate state for each picker so they can independently open/close
@@ -178,7 +208,6 @@ function Room({ onOpenSidebar, sidebarOpen: sidebarIsOpen }) {
   const touchCount = useRef(0)
 
   const stageRef = useRef(null)
-  const scrollWrapperRef = useRef(null)
   const inputRef = useRef(null)
   const fileInputRef = useRef(null)
   const toolbarRef = useRef(null)
@@ -219,18 +248,14 @@ function Room({ onOpenSidebar, sidebarOpen: sidebarIsOpen }) {
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
-  const getCanvasPos = (clientX, clientY) => {
-    const stage = stageRef.current
-    const rect = stage.container().getBoundingClientRect()
-    return {
-      x: (clientX - rect.left) / scale,
-      y: (clientY - rect.top - stageY) / scale,
-    }
-  }
+  const getCanvasPos = (clientX, clientY) => ({
+    x: (clientX - stageX) / scale,
+    y: (clientY - stageY) / scale,
+  })
 
   const getPointerPosition = () => {
     const pos = stageRef.current.getPointerPosition()
-    return { x: pos.x / scale, y: (pos.y - stageY) / scale }
+    return { x: (pos.x - stageX) / scale, y: (pos.y - stageY) / scale }
   }
 
   const getTouchPosition = (touch) => getCanvasPos(touch.clientX, touch.clientY)
@@ -362,25 +387,45 @@ function Room({ onOpenSidebar, sidebarOpen: sidebarIsOpen }) {
   useEffect(() => {
     const handleWheel = (e) => {
       if (toolbarRef.current?.contains(e.target)) return
-      if (e.ctrlKey || e.metaKey) {
-        // Zoom — must preventDefault so browser doesn't zoom the page
-        e.preventDefault()
-        setScale(prev => Math.min(Math.max(prev * (e.deltaY > 0 ? 0.92 : 1.08), 1.0), 4.0))
-        return
-      }
-      // Horizontal wheel (trackpad swipe or shift+wheel) — let wrapper scroll
-      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
-        // Don't preventDefault — let the browser scroll the overflow wrapper natively
-        return
-      }
-      // Vertical scroll — handle in JS, prevent default page scroll
       e.preventDefault()
+
+      if (e.ctrlKey || e.metaKey) {
+        // ── Zoom anchored to cursor position ──────────────────────────────
+        const factor = e.deltaY > 0 ? 0.92 : 1.08
+        setScale(prevScale => {
+          const next = Math.min(Math.max(prevScale * factor, 1.0), 4.0)
+          // Anchor: point under cursor stays fixed on screen.
+          // canvasPoint = (cursor - stage) / prevScale
+          // newStageX = cursor - canvasPoint * next
+          setStageX(prevX => {
+            const canvasX = (e.clientX - prevX) / prevScale
+            const nx = e.clientX - canvasX * next
+            return clamp(nx, stageY, next).x
+          })
+          setStageY(prevY => {
+            const canvasY = (e.clientY - prevY) / prevScale
+            const ny = e.clientY - canvasY * next
+            return clamp(stageX, ny, next).y
+          })
+          return next
+        })
+        return
+      }
+
       if (isDrawing.current) return
-      setStageY(prev => Math.min(0, prev - e.deltaY))
+
+      // ── Horizontal trackpad swipe ─────────────────────────────────────
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+        setStageX(prev => clamp(prev - e.deltaX, stageY).x)
+        return
+      }
+
+      // ── Vertical scroll ───────────────────────────────────────────────
+      setStageY(prev => clamp(stageX, prev - e.deltaY).y)
     }
     window.addEventListener('wheel', handleWheel, { passive: false })
     return () => window.removeEventListener('wheel', handleWheel)
-  }, [])
+  }, [stageX, stageY, scale])
 
   // Global resize mouse/touch tracking
   useEffect(() => {
@@ -450,7 +495,10 @@ function Room({ onOpenSidebar, sidebarOpen: sidebarIsOpen }) {
     if (resizingId.current) return
     if (tool === 'pan') {
       isPanning.current = true
-      panStart.current = { screenY: rawClientY ?? 0, stageY }
+      panStart.current = {
+        screenX: rawClientX ?? 0, screenY: rawClientY ?? 0,
+        stageX, stageY,
+      }
       return
     }
     if (tool === 'text') {
@@ -477,9 +525,12 @@ function Room({ onOpenSidebar, sidebarOpen: sidebarIsOpen }) {
   const moveDraw = (pos, rawClientX, rawClientY) => {
     if (resizingId.current) return
     if (tool === 'pan' && isPanning.current && panStart.current) {
-      if (rawClientY == null) return
+      if (rawClientX == null || rawClientY == null) return
+      const dx = rawClientX - panStart.current.screenX
       const dy = rawClientY - panStart.current.screenY
-      setStageY(Math.min(0, panStart.current.stageY + dy))
+      const c = clamp(panStart.current.stageX + dx, panStart.current.stageY + dy)
+      setStageX(c.x)
+      setStageY(c.y)
       return
     }
     if (!isDrawing.current) return
@@ -559,10 +610,7 @@ function Room({ onOpenSidebar, sidebarOpen: sidebarIsOpen }) {
     const touch = e.evt.touches[0]
     if (!touch) return
 
-    // Only block native scroll when a drawing/pan tool is active.
-    // Otherwise let the touch fall through so CSS overflowX scroll works.
-    const isActiveTool = ['draw', 'eraser', 'rect', 'circle', 'arrow', 'line', 'text', 'pan'].includes(tool)
-    if (isActiveTool) e.evt.preventDefault()
+    e.evt.preventDefault()
 
     const pos = getTouchPosition(touch)
     const isBackground = e.target === e.target.getStage() || e.target.name() === 'background'
@@ -624,7 +672,7 @@ function Room({ onOpenSidebar, sidebarOpen: sidebarIsOpen }) {
       const res = await fetch(`${BACKEND_URL}/upload`, { method: 'POST', body: formData })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
-      const cx = (CANVAS_W / 2)
+      const cx = (window.innerWidth / 2 - stageX) / scale
       const cy = (window.innerHeight / 2 - stageY) / scale
       addDraft({ id: Date.now().toString(), type: 'image', x: cx - 200, y: cy - 150, width: 400, height: 300, url: data.url })
     } catch (err) { alert(`Upload failed: ${err.message}`) }
@@ -1140,6 +1188,10 @@ function Room({ onOpenSidebar, sidebarOpen: sidebarIsOpen }) {
 
           <TBtn onClick={() => setScale(prev => {
             const next = Math.max(prev * 0.85, 1.0)
+            const cx = window.innerWidth / 2
+            const cy = window.innerHeight / 2
+            setStageX(px => clamp(cx - (cx - px) * (next / prev), stageY, next).x)
+            setStageY(py => clamp(stageX, cy - (cy - py) * (next / prev), next).y)
             // no position reclamp needed — stageY stays valid
             return next
           })} title="Zoom out">
@@ -1150,6 +1202,10 @@ function Room({ onOpenSidebar, sidebarOpen: sidebarIsOpen }) {
           </span>
           <TBtn onClick={() => setScale(prev => {
             const next = Math.min(prev * 1.15, 4.0)
+            const cx = window.innerWidth / 2
+            const cy = window.innerHeight / 2
+            setStageX(px => clamp(cx - (cx - px) * (next / prev), stageY, next).x)
+            setStageY(py => clamp(stageX, cy - (cy - py) * (next / prev), next).y)
             // no position reclamp needed — stageY stays valid
             return next
           })} title="Zoom in">
@@ -1252,61 +1308,45 @@ function Room({ onOpenSidebar, sidebarOpen: sidebarIsOpen }) {
         />
       )}
 
-      {/* Horizontal scroll wrapper — CSS handles left/right on narrow screens.
-          On desktop (>1280px) the inner div centers. On mobile it scrolls. */}
-      <div ref={scrollWrapperRef} style={{
-        width: '100%', height: '100vh',
-        overflowX: 'auto', overflowY: 'hidden',
-        background: '#e8ddd0',
-      }}>
-        <div style={{
-          width: CANVAS_W,
-          height: '100vh',
-          margin: '0 auto',
-          position: 'relative',
-          background: '#faf6f0',
-          boxShadow: '0 0 60px rgba(44,36,16,0.12)',
-        }}>
-          <Stage ref={stageRef}
-            width={CANVAS_W} height={window.innerHeight}
-            style={{ touchAction: 'pan-x' }}
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={() => setHoveredElementId(null)}
-            onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd}
-          >
-            <Layer listening={false}>
-              {/* Background dots — fillPatternOffset scrolls pattern with camera */}
-              <Rect
-                name="bg-dots"
-                x={0} y={0}
-                width={CANVAS_W} height={window.innerHeight}
-                fillPatternImage={dotGridCanvas}
-                fillPatternOffset={{ x: 0, y: -stageY / scale }}
-                fillPatternScale={{ x: scale, y: scale }}
+      <Stage ref={stageRef}
+        width={window.innerWidth} height={window.innerHeight}
+        style={{ touchAction: 'none' }}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={() => setHoveredElementId(null)}
+        onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd}
+      >
+        {/* Background: full-viewport rect, pattern offset tracks camera */}
+        <Layer listening={false}>
+          <Rect
+            x={0} y={0}
+            width={window.innerWidth} height={window.innerHeight}
+            fillPatternImage={dotGridCanvas}
+            fillPatternOffset={{ x: -stageX / scale, y: -stageY / scale }}
+            fillPatternScale={{ x: scale, y: scale }}
+          />
+        </Layer>
+
+        {/* Content: Group shifted by stageX/stageY and scaled */}
+        <Layer>
+          <Rect name="background" x={0} y={0}
+            width={window.innerWidth} height={window.innerHeight}
+            fill="transparent" listening={true}
+          />
+          <Group x={stageX} y={stageY} scaleX={scale} scaleY={scale}>
+            {sentElements.map(el => renderElement(el, false)).flat().filter(Boolean)}
+            {draftElements.map(el => renderElement(el, true)).flat().filter(Boolean)}
+            {currentShape && renderRoughShape(currentShape, true)}
+            {currentLine && (
+              <Line points={currentLine.points} stroke={currentLine.stroke}
+                strokeWidth={currentLine.strokeWidth}
+                tension={0.3} lineCap="round" lineJoin="round" opacity={0.65}
               />
-            </Layer>
-            <Layer>
-              {/* Hit rect for background clicks */}
-              <Rect name="background" x={0} y={0} width={CANVAS_W} height={window.innerHeight}
-                fill="transparent" listening={true}
-              />
-              <Group y={stageY} scaleX={scale} scaleY={scale}>
-                {sentElements.map(el => renderElement(el, false)).flat().filter(Boolean)}
-                {draftElements.map(el => renderElement(el, true)).flat().filter(Boolean)}
-                {currentShape && renderRoughShape(currentShape, true)}
-                {currentLine && (
-                  <Line points={currentLine.points} stroke={currentLine.stroke}
-                    strokeWidth={currentLine.strokeWidth}
-                    tension={0.3} lineCap="round" lineJoin="round" opacity={0.65}
-                  />
-                )}
-              </Group>
-            </Layer>
-          </Stage>
-        </div>
-      </div>
+            )}
+          </Group>
+        </Layer>
+      </Stage>
     </div>
   )
 }
