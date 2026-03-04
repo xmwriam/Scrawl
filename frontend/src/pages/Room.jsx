@@ -1,5 +1,5 @@
-import { Stage, Layer, Rect, Line, Text, Image as KonvaImage, Circle } from 'react-konva'
-import { useRef, useState, useEffect, useContext, useCallback } from 'react'
+import { Stage, Layer, Group, Rect, Line, Text, Image as KonvaImage, Circle } from 'react-konva'
+import { useRef, useState, useEffect, useContext, useCallback, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { AuthContext } from '../context/AuthContext'
 import { useSocket } from '../hooks/useSocket'
@@ -8,16 +8,13 @@ import { useAudio } from '../hooks/useAudio'
 import { HexColorPicker } from 'react-colorful'
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'
-// Virtual canvas is much larger than the viewport so the dot grid never runs out.
-// The background Rect is drawn in canvas-space, so it must be big enough that
-// even when zoomed in (scale=4.0) the virtual canvas is large enough.
-const VIRTUAL_W = 8000   // wider than any likely content
-const VIRTUAL_H = 40000  // tall enough for long scrolling
-// Desktop canvas is locked to screen width (no horizontal scroll).
-// On mobile, users can pan horizontally up to VIRTUAL_W.
-// Left/right margin in canvas-space pixels — content can't be drawn or scrolled
-// closer than this to either edge. Gives breathing room on all screen sizes.
-const CANVAS_MARGIN = 48
+// Fixed canvas width — the "page" is always this wide in canvas-space.
+// On larger viewports it sits centered; on smaller viewports the stage is
+// scaled down so it still fits without any horizontal scrolling.
+const CANVAS_W = 1280
+// Canvas is infinite downward — CANVAS_H just needs to be large enough that
+// the dot-grid background never runs out while scrolling.
+const CANVAS_H = 40000
 const FIXED_OPACITY = 0.72
 const HANDLE_RADIUS = 7
 
@@ -153,20 +150,29 @@ function Room({ onOpenSidebar, sidebarOpen: sidebarIsOpen }) {
   const navigate = useNavigate()
   const { token, user } = useContext(AuthContext)
 
-  const [stagePos, setStagePos] = useState({ x: CANVAS_MARGIN, y: 0 })
-  const [scale, setScale] = useState(1)
-  // Track live window width so narrowed browser tabs get horizontal scroll
-  const [windowWidth, setWindowWidth] = useState(window.innerWidth)
+  // stageX: centers the CANVAS_W page in the current viewport.
+  // If viewport is narrower than CANVAS_W, we scale the stage down instead.
+  // Base scale: shrink canvas to fit viewport if narrower than CANVAS_W
+  const computeScale = () => window.innerWidth < CANVAS_W
+    ? window.innerWidth / CANVAS_W
+    : 1
+  // Horizontal offset to center the canvas in wider viewports (screen pixels)
+  const computeOffsetX = () => Math.max(0, (window.innerWidth - CANVAS_W * computeScale()) / 2)
+
+  const [stagePos, setStagePos] = useState({ x: 0, y: 0 })
+  const [offsetX, setOffsetX] = useState(computeOffsetX)
+  const [scale, setScale] = useState(computeScale)
+
+  // Keep offsetX and base scale in sync on resize
   useEffect(() => {
-    const onResize = () => setWindowWidth(window.innerWidth)
+    const onResize = () => {
+      setOffsetX(computeOffsetX())
+      setScale(computeScale())
+      setStagePos(prev => ({ x: 0, y: prev.y }))
+    }
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
   }, [])
-  // Canvas "native" width — the width at which no horizontal scroll is needed.
-  // We fix this to the initial window width at mount time (the "full" size).
-  const nativeWidth = useRef(window.innerWidth)
-  // Allow horizontal scroll whenever the viewport is narrower than native width.
-  const needsHScroll = windowWidth < nativeWidth.current
   const [loadedImages, setLoadedImages] = useState({})
   const [textInput, setTextInput] = useState(null)
   // FIX: separate state for each picker so they can independently open/close
@@ -229,30 +235,15 @@ function Room({ onOpenSidebar, sidebarOpen: sidebarIsOpen }) {
   const activeShape = shapeTools.find(s => s.id === tool)
 
   // ── Canvas bounds ─────────────────────────────────────────────────────────
-  // If viewport is at native width: x locked to 0 (no horizontal scroll needed).
-  // If viewport is narrower (tab resized, mobile): allow horizontal scroll so
-  // users can pan to content that's off the right edge.
+  // x is always 0 (stage never shifts horizontally — centering is done via offsetX).
+  // Only vertical scrolling allowed, downward only from y=0.
   const clampPos = useCallback((pos, sc = scale) => {
-    const vw = window.innerWidth
     const vh = window.innerHeight
-    const minY = -(VIRTUAL_H * sc - vh)
-    const clampedY = Math.min(0, Math.max(minY, pos.y))
-    if (!needsHScroll) {
-      return { x: CANVAS_MARGIN, y: clampedY }
-    }
-    // Narrowed viewport horizontal clamping:
-    // stagePos.x is the screen-pixel offset of canvas origin.
-    // maxX = CANVAS_MARGIN: leftmost position (left margin always visible).
-    // minX: scroll just enough to reveal the right edge of native-width content,
-    //       keeping CANVAS_MARGIN of breathing room on the right.
-    //   screen position of right edge = stagePos.x + nativeWidth.current
-    //   we want that to be >= vw - CANVAS_MARGIN
-    //   => stagePos.x >= vw - nativeWidth.current - CANVAS_MARGIN
-    const maxX = CANVAS_MARGIN
-    const minX = vw - nativeWidth.current - CANVAS_MARGIN
-    const clampedX = Math.min(maxX, Math.max(minX, pos.x))
-    return { x: clampedX, y: clampedY }
-  }, [scale, needsHScroll])
+    // Allow scrolling well past CANVAS_H — content is infinite downward.
+    // We only prevent scrolling above the top (y > 0) and cap at a large limit.
+    const clampedY = Math.min(0, pos.y)
+    return { x: 0, y: clampedY }
+  }, [])
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -260,14 +251,14 @@ function Room({ onOpenSidebar, sidebarOpen: sidebarIsOpen }) {
     const stage = stageRef.current
     const rect = stage.container().getBoundingClientRect()
     return {
-      x: (clientX - rect.left - stagePos.x) / scale,
+      x: (clientX - rect.left - offsetX) / scale,
       y: (clientY - rect.top - stagePos.y) / scale,
     }
   }
 
   const getPointerPosition = () => {
     const pos = stageRef.current.getPointerPosition()
-    return { x: (pos.x - stagePos.x) / scale, y: (pos.y - stagePos.y) / scale }
+    return { x: (pos.x - offsetX) / scale, y: (pos.y - stagePos.y) / scale }
   }
 
   const getTouchPosition = (touch) => getCanvasPos(touch.clientX, touch.clientY)
@@ -402,7 +393,8 @@ function Room({ onOpenSidebar, sidebarOpen: sidebarIsOpen }) {
       e.preventDefault()
       if (e.ctrlKey || e.metaKey) {
         setScale(prev => {
-          const next = Math.min(Math.max(prev * (e.deltaY > 0 ? 0.92 : 1.08), 1.0), 4.0)
+          const baseScale = computeScale()
+          const next = Math.min(Math.max(prev * (e.deltaY > 0 ? 0.92 : 1.08), baseScale), 4.0)
           // Re-clamp position at new scale
           setStagePos(p => clampPos(p, next))
           return next
@@ -513,11 +505,9 @@ function Room({ onOpenSidebar, sidebarOpen: sidebarIsOpen }) {
     if (resizingId.current) return
     // FIX: pan movement
     if (tool === 'pan' && isPanning.current && panStart.current) {
-      // pos is in canvas-space (already divided by scale), so multiply back to
-      // get screen-pixel delta, then apply directly to stagePos (also screen pixels).
-      const dx = (pos.x - panStart.current.x) * scale
+      // Only vertical panning — x is always locked by clampPos
       const dy = (pos.y - panStart.current.y) * scale
-      setStagePos(prev => clampPos({ x: prev.x + dx, y: prev.y + dy }))
+      setStagePos(prev => clampPos({ x: prev.x, y: prev.y + dy }))
       return
     }
     if (!isDrawing.current) return
@@ -610,7 +600,7 @@ function Room({ onOpenSidebar, sidebarOpen: sidebarIsOpen }) {
       const newDist = getPinchDistance(e.evt.touches)
       if (lastPinchDistance.current) {
         const ratio = newDist / lastPinchDistance.current
-        setScale(prev => Math.min(Math.max(prev * ratio, 1.0), 4.0))
+        setScale(prev => Math.min(Math.max(prev * ratio, computeScale()), 4.0))
       }
       lastPinchDistance.current = newDist
       return
@@ -657,7 +647,7 @@ function Room({ onOpenSidebar, sidebarOpen: sidebarIsOpen }) {
       const res = await fetch(`${BACKEND_URL}/upload`, { method: 'POST', body: formData })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
-      const cx = (window.innerWidth / 2 - stagePos.x) / scale
+      const cx = (window.innerWidth / 2 - offsetX) / scale
       const cy = (window.innerHeight / 2 - stagePos.y) / scale
       addDraft({ id: Date.now().toString(), type: 'image', x: cx - 200, y: cy - 150, width: 400, height: 300, url: data.url })
     } catch (err) { alert(`Upload failed: ${err.message}`) }
@@ -668,7 +658,7 @@ function Room({ onOpenSidebar, sidebarOpen: sidebarIsOpen }) {
 
   const stickers = ['😍','🎉','💕','✨','🌟','😂','🔥','💯','🎨','📝','💌','🌹']
   const addSticker = (emoji) => {
-    const cx = (window.innerWidth / 2 - stagePos.x) / scale
+    const cx = (window.innerWidth / 2 - offsetX) / scale
     const cy = (window.innerHeight / 2 - stagePos.y) / scale
     addDraft({ id: Date.now().toString(), type: 'text', x: cx, y: cy, text: emoji, fontSize: 48, fill: '#2c2410', fontFamily: 'Arial' })
     setShowStickers(false)
@@ -961,7 +951,7 @@ function Room({ onOpenSidebar, sidebarOpen: sidebarIsOpen }) {
 
   // ── Dot grid ──────────────────────────────────────────────────────────────
 
-  const dotGridCanvas = (() => {
+  const dotGridCanvas = useMemo(() => {
     const c = document.createElement('canvas')
     c.width = 24; c.height = 24
     const ctx = c.getContext('2d')
@@ -972,7 +962,7 @@ function Room({ onOpenSidebar, sidebarOpen: sidebarIsOpen }) {
     ctx.fillStyle = '#c8b89a'
     ctx.fill()
     return c
-  })()
+  }, [])
 
   const getCursor = () => {
     if (resizingId.current) return 'nwse-resize'
@@ -1172,17 +1162,17 @@ function Room({ onOpenSidebar, sidebarOpen: sidebarIsOpen }) {
           <Divider />
 
           <TBtn onClick={() => setScale(prev => {
-            const next = Math.max(prev * 0.85, 1.0)
+            const next = Math.max(prev * 0.85, computeScale())
             setStagePos(p => clampPos(p, next))
             return next
           })} title="Zoom out">
             <SvgIcon name="minus" />
           </TBtn>
           <span style={{ fontSize: 10, color: '#b0a090', minWidth: 32, textAlign: 'center', fontWeight: 700, fontFamily: 'Nunito, sans-serif', flexShrink: 0 }}>
-            {Math.round(scale * 100)}%
+            {Math.round(scale / computeScale() * 100)}%
           </span>
           <TBtn onClick={() => setScale(prev => {
-            const next = Math.min(prev * 1.15, 4.0)
+            const next = Math.min(prev * 1.15, 4.0 * computeScale())
             setStagePos(p => clampPos(p, next))
             return next
           })} title="Zoom in">
@@ -1287,27 +1277,50 @@ function Room({ onOpenSidebar, sidebarOpen: sidebarIsOpen }) {
 
       <Stage ref={stageRef}
         width={window.innerWidth} height={window.innerHeight}
-        x={stagePos.x} y={stagePos.y} scaleX={scale} scaleY={scale}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={() => setHoveredElementId(null)}
         onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd}
       >
-        <Layer>
-          <Rect name="background" x={-VIRTUAL_W} y={0}
-            width={VIRTUAL_W * 3} height={VIRTUAL_H}
+        {/* Layer 1 — background dots, viewport-sized, no transforms.
+            fillPatternOffset scrolls the dot pattern with the camera so it
+            feels infinite in all directions. */}
+        <Layer listening={false}>
+          <Rect
+            name="background"
+            x={0} y={0}
+            width={window.innerWidth} height={window.innerHeight}
             fillPatternImage={dotGridCanvas}
+            fillPatternScale={{ x: scale, y: scale }}
+            fillPatternOffset={{
+              x: -offsetX / scale,
+              y: -stagePos.y / scale,
+            }}
           />
-          {sentElements.map(el => renderElement(el, false)).flat().filter(Boolean)}
-          {draftElements.map(el => renderElement(el, true)).flat().filter(Boolean)}
-          {currentShape && renderRoughShape(currentShape, true)}
-          {currentLine && (
-            <Line points={currentLine.points} stroke={currentLine.stroke}
-              strokeWidth={currentLine.strokeWidth}
-              tension={0.3} lineCap="round" lineJoin="round" opacity={0.65}
+        </Layer>
+
+        {/* Layer 2 — all canvas content. The Group applies centeredX offset and
+            scale so element coordinates stay in clean canvas-space. */}
+        <Layer>
+          <Group
+            x={offsetX} y={stagePos.y}
+            scaleX={scale} scaleY={scale}
+          >
+            {/* Transparent hit rect so empty-canvas clicks register as background */}
+            <Rect name="background" x={0} y={-99999} width={CANVAS_W} height={999999}
+              fill="transparent" listening={true}
             />
-          )}
+            {sentElements.map(el => renderElement(el, false)).flat().filter(Boolean)}
+            {draftElements.map(el => renderElement(el, true)).flat().filter(Boolean)}
+            {currentShape && renderRoughShape(currentShape, true)}
+            {currentLine && (
+              <Line points={currentLine.points} stroke={currentLine.stroke}
+                strokeWidth={currentLine.strokeWidth}
+                tension={0.3} lineCap="round" lineJoin="round" opacity={0.65}
+              />
+            )}
+          </Group>
         </Layer>
       </Stage>
     </div>
