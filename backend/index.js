@@ -206,6 +206,49 @@ app.get('/users/search', verifyToken, async (req, res) => {
   }
 })
 
+// ─── Elements ─────────────────────────────────────────────────────────────────
+
+// FIX: Persist element mutations (position, size, fontSize) after drag/resize
+// so that the canvas looks the same on refresh.
+app.patch('/elements/:elementId', verifyToken, async (req, res) => {
+  try {
+    const { elementId } = req.params
+    const { data: updatedData } = req.body
+
+    if (!updatedData) return res.status(400).json({ error: 'data required' })
+
+    // Verify the element belongs to a room the user is a member of
+    const { data: element, error: fetchError } = await supabase
+      .from('elements')
+      .select('id, room_id, sent_by_username')
+      .eq('id', elementId)
+      .single()
+
+    if (fetchError || !element) return res.status(404).json({ error: 'Element not found' })
+
+    const { data: membership } = await supabase
+      .from('room_members')
+      .select('user_id')
+      .eq('room_id', element.room_id)
+      .eq('user_id', req.user.userId)
+      .single()
+
+    if (!membership) return res.status(403).json({ error: 'Not a member of this room' })
+
+    const { error: updateError } = await supabase
+      .from('elements')
+      .update({ data: updatedData })
+      .eq('id', elementId)
+
+    if (updateError) throw updateError
+
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('Element update error:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // ─── Rooms ────────────────────────────────────────────────────────────────────
 
 app.get('/rooms/mine', verifyToken, async (req, res) => {
@@ -235,7 +278,6 @@ app.post('/rooms/create-with-user', verifyToken, async (req, res) => {
     if (!targetUserId) return res.status(400).json({ error: 'Target user required' })
     if (targetUserId === userId) return res.status(400).json({ error: "Can't start a journal with yourself" })
 
-    // Check if direct room already exists between these two
     const { data: myRooms } = await supabase
       .from('room_members').select('room_id').eq('user_id', userId)
 
@@ -246,7 +288,6 @@ app.post('/rooms/create-with-user', verifyToken, async (req, res) => {
         .eq('user_id', targetUserId).in('room_id', myRoomIds)
 
       if (shared && shared.length > 0) {
-        // Make sure it's a direct room not a group
         const { data: existingRoom } = await supabase
           .from('rooms').select('*')
           .eq('id', shared[0].room_id)
@@ -327,14 +368,12 @@ app.post('/groups/create', verifyToken, async (req, res) => {
     if (!memberUsernames || memberUsernames.length === 0)
       return res.status(400).json({ error: 'Add at least one member' })
 
-    // Create the group
     const { data: group, error: groupError } = await supabase
       .from('groups')
       .insert({ name: name.trim(), created_by: userId })
       .select().single()
     if (groupError) throw groupError
 
-    // Look up member user IDs from usernames
     const { data: memberUsers, error: usersError } = await supabase
       .from('users')
       .select('id, username')
@@ -347,7 +386,6 @@ app.post('/groups/create', verifyToken, async (req, res) => {
     if (notFound.length > 0)
       return res.status(400).json({ error: `Users not found: ${notFound.join(', ')}` })
 
-    // Generate unique room code
     let roomCode
     let roomExists = true
     while (roomExists) {
@@ -357,7 +395,6 @@ app.post('/groups/create', verifyToken, async (req, res) => {
       roomExists = !!data
     }
 
-    // Create a room for this group
     const { data: room, error: roomError } = await supabase
       .from('rooms')
       .insert({
@@ -370,7 +407,6 @@ app.post('/groups/create', verifyToken, async (req, res) => {
       .select().single()
     if (roomError) throw roomError
 
-    // Add creator + all members to room_members and group_members
     const allUserIds = [userId, ...memberUsers.map(u => u.id)]
     const uniqueUserIds = [...new Set(allUserIds)]
 
@@ -488,14 +524,14 @@ io.on('connection', (socket) => {
     })
   })
 
-socket.on('send-drafts', async ({ roomId, elements }) => {
-  const ids = elements.map(el => el.id)
-  await supabase.from('elements').update({
-    sent: true,
-    sent_by_username: elements[0]?.sentByUsername || null,
-  }).in('id', ids)
-  socket.to(roomId).emit('elements-received', elements)
-})
+  socket.on('send-drafts', async ({ roomId, elements }) => {
+    const ids = elements.map(el => el.id)
+    await supabase.from('elements').update({
+      sent: true,
+      sent_by_username: elements[0]?.sentByUsername || null,
+    }).in('id', ids)
+    socket.to(roomId).emit('elements-received', elements)
+  })
 
   socket.on('disconnect', () => {
     const roomId = socket.data.roomId

@@ -8,8 +8,13 @@ import { useAudio } from '../hooks/useAudio'
 import { HexColorPicker } from 'react-colorful'
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'
-const CANVAS_WIDTH = window.innerWidth
-const CANVAS_HEIGHT = 10000
+// Virtual canvas is much larger than the viewport so the dot grid never runs out.
+// The background Rect is drawn in canvas-space, so it must be big enough that
+// even when zoomed out (scale=0.2) the visible area is always covered.
+const VIRTUAL_W = 8000   // wider than any likely content
+const VIRTUAL_H = 40000  // tall enough for long scrolling
+// Desktop canvas is locked to screen width (no horizontal scroll).
+// On mobile, users can pan horizontally up to VIRTUAL_W.
 const FIXED_OPACITY = 0.72
 const HANDLE_RADIUS = 7
 
@@ -34,6 +39,8 @@ const SvgIcon = ({ name, size = 15 }) => {
     minus:  'M5 12h14',
     trash:  ['M3 6h18','M19 6l-1 14H6L5 6','M9 6V4h6v2'],
     image:  ['M21 15l-5-5L5 21','M3 3h18v18H3zM8.5 8.5a1 1 0 1 0 0-2 1 1 0 0 0 0 2'],
+    // Pan/hand tool icon
+    pan:    'M9 11V6a1 1 0 0 1 2 0v3m0 0V5a1 1 0 0 1 2 0v4m0 0V6a1 1 0 0 1 2 0v5m0 0V9a1 1 0 0 1 2 0v7a6 6 0 0 1-6 6H9a5 5 0 0 1-5-5v-3a1 1 0 0 1 2 0',
   }
   const d = icons[name]
   if (!d) return null
@@ -44,16 +51,20 @@ const SvgIcon = ({ name, size = 15 }) => {
   )
 }
 
-const TBtn = ({ active, onClick, children, title, style = {} }) => (
-  <button onClick={onClick} title={title} style={{
-    padding: '6px 8px', borderRadius: 8, border: 'none', cursor: 'pointer',
-    background: active ? '#2c2410' : '#f5f0e8',
-    color: active ? '#faf6f0' : '#6b5040',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    gap: 4, fontWeight: 700, fontSize: 12,
-    fontFamily: 'Nunito, sans-serif',
-    transition: 'all 0.15s', flexShrink: 0, ...style,
-  }}>
+const TBtn = ({ active, onClick, children, title, style = {}, onPointerDown }) => (
+  <button
+    onClick={onClick}
+    onPointerDown={onPointerDown}
+    title={title}
+    style={{
+      padding: '6px 8px', borderRadius: 8, border: 'none', cursor: 'pointer',
+      background: active ? '#2c2410' : '#f5f0e8',
+      color: active ? '#faf6f0' : '#6b5040',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      gap: 4, fontWeight: 700, fontSize: 12,
+      fontFamily: 'Nunito, sans-serif',
+      transition: 'all 0.15s', flexShrink: 0, ...style,
+    }}>
     {children}
   </button>
 )
@@ -64,12 +75,17 @@ const Divider = () => (
 
 // ── Color Picker Dropdown ─────────────────────────────────────────────────────
 
-const ColorPickerDropdown = ({ label, color, onChange, swatches, showTransparent, onTransparent }) => (
-  <div style={{
-    position: 'absolute', top: 38, left: 0, background: '#fffcf8',
-    borderRadius: 12, padding: 12, zIndex: 300, width: 224,
-    boxShadow: '0 6px 24px rgba(44,36,16,0.14)', border: '1px solid #e8ddd0',
-  }}>
+const ColorPickerDropdown = ({ label, color, onChange, swatches, showTransparent, onTransparent, onClose }) => (
+  <div
+    style={{
+      position: 'absolute', top: 44, left: '50%', transform: 'translateX(-50%)',
+      background: '#fffcf8',
+      borderRadius: 12, padding: 12, zIndex: 9999, width: 224,
+      boxShadow: '0 6px 24px rgba(44,36,16,0.18)', border: '1px solid #e8ddd0',
+    }}
+    // Stop clicks inside the picker from bubbling up to the document close handler
+    onPointerDown={(e) => e.stopPropagation()}
+  >
     <p style={{
       margin: '0 0 8px', fontSize: 10, color: '#b0a090', fontWeight: 700,
       letterSpacing: 1.5, textTransform: 'uppercase', fontFamily: 'Nunito, sans-serif',
@@ -136,10 +152,12 @@ function Room() {
 
   const [stagePos, setStagePos] = useState({ x: 0, y: 0 })
   const [scale, setScale] = useState(1)
+  const [isMobile] = useState(() => window.innerWidth < 768)
   const [loadedImages, setLoadedImages] = useState({})
   const [textInput, setTextInput] = useState(null)
-  const [showColorPicker, setShowColorPicker] = useState(false)
-  const [colorPickerTarget, setColorPickerTarget] = useState('stroke')
+  // FIX: separate state for each picker so they can independently open/close
+  const [showStrokeColorPicker, setShowStrokeColorPicker] = useState(false)
+  const [showFillColorPicker, setShowFillColorPicker] = useState(false)
   const [showStickers, setShowStickers] = useState(false)
   const [showShapes, setShowShapes] = useState(false)
   const [uploadingImage, setUploadingImage] = useState(false)
@@ -148,6 +166,14 @@ function Room() {
   const [lastSeenTime, setLastSeenTime] = useState(null)
   const [playingAudioId, setPlayingAudioId] = useState(null)
   const audioRefs = useRef({})
+
+  // FIX: pan tool state
+  const isPanning = useRef(false)
+  const panStart = useRef(null)
+
+  // Pinch-to-zoom state
+  const lastPinchDistance = useRef(null)
+  const touchCount = useRef(0)
 
   const stageRef = useRef(null)
   const inputRef = useRef(null)
@@ -188,9 +214,27 @@ function Room() {
   const isShapeTool = shapeTools.some(s => s.id === tool)
   const activeShape = shapeTools.find(s => s.id === tool)
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
+  // ── Canvas bounds ─────────────────────────────────────────────────────────
+  // Desktop: no horizontal scroll (x is always 0).
+  // Mobile: horizontal scroll allowed, but clamped so the canvas edge never
+  //         goes past the viewport (left) or pulls too far right.
+  const clampPos = useCallback((pos, sc = scale) => {
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+    // Vertical: never scroll above top (y <= 0), never past virtual bottom
+    const minY = -(VIRTUAL_H * sc - vh)
+    const clampedY = Math.min(0, Math.max(minY, pos.y))
+    if (!isMobile) {
+      // Desktop: lock x to 0
+      return { x: 0, y: clampedY }
+    }
+    // Mobile: allow horizontal scroll, but clamp so you can't scroll past VIRTUAL_W
+    const minX = -(VIRTUAL_W * sc - vw)
+    const clampedX = Math.min(0, Math.max(minX, pos.x))
+    return { x: clampedX, y: clampedY }
+  }, [scale, isMobile])
 
-  const isSticker = (el) => el.type === 'text' && el.fontSize >= 36
+  // ── Helpers ───────────────────────────────────────────────────────────────
 
   const getCanvasPos = (clientX, clientY) => {
     const stage = stageRef.current
@@ -236,6 +280,25 @@ function Room() {
 
   const currentStrokeColor = tool === 'text' ? textColor : tool === 'draw' ? drawColor : shapeColor
 
+  // ── Persist element mutations back to DB ──────────────────────────────────
+  // FIX: After drag or resize of a sent element, update it in the DB so position/size
+  // is preserved on refresh.
+  const persistElement = useCallback(async (element) => {
+    if (!token) return
+    try {
+      await fetch(`${BACKEND_URL}/elements/${element.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ data: element }),
+      })
+    } catch (err) {
+      console.error('Failed to persist element:', err)
+    }
+  }, [token])
+
   // ── Resize helpers ────────────────────────────────────────────────────────
 
   const startResize = (el, clientX, clientY) => {
@@ -264,7 +327,6 @@ function Room() {
         }
       }
       if (el.type === 'text') {
-        // All text (stickers and regular) resize via fontSize
         const delta = Math.max(dx, dy)
         return {
           ...el,
@@ -282,6 +344,11 @@ function Room() {
   }
 
   const endResize = () => {
+    if (resizingId.current) {
+      // Persist the updated element after resize ends
+      const el = draftElements.find(e => e.id === resizingId.current)
+      if (el) persistElement(el)
+    }
     resizingId.current = null
     resizeStart.current = null
   }
@@ -314,15 +381,20 @@ function Room() {
       if (toolbarRef.current?.contains(e.target)) return
       e.preventDefault()
       if (e.ctrlKey || e.metaKey) {
-        setScale(prev => Math.min(Math.max(prev * (e.deltaY > 0 ? 0.9 : 1.1), 0.2), 4))
+        setScale(prev => {
+          const next = Math.min(Math.max(prev * (e.deltaY > 0 ? 0.9 : 1.1), 0.2), 4)
+          // Re-clamp position at new scale
+          setStagePos(p => clampPos(p, next))
+          return next
+        })
       } else {
         if (isDrawing.current) return
-        setStagePos(prev => ({ x: 0, y: Math.min(0, prev.y - e.deltaY) }))
+        setStagePos(prev => clampPos({ x: prev.x, y: prev.y - e.deltaY }))
       }
     }
     window.addEventListener('wheel', handleWheel, { passive: false })
     return () => window.removeEventListener('wheel', handleWheel)
-  }, [])
+  }, [clampPos])
 
   // Global resize mouse/touch tracking
   useEffect(() => {
@@ -345,7 +417,6 @@ function Room() {
     }
   }, [scale, draftElements])
 
-  // ── HOVER FIX: clear hoveredElementId when mouse moves off stage ──────────
   useEffect(() => {
     const handleGlobalMove = (e) => {
       const stage = stageRef.current
@@ -359,22 +430,15 @@ function Room() {
     return () => window.removeEventListener('mousemove', handleGlobalMove)
   }, [])
 
-  // Refs for dropdown containers — used for outside-click detection
-  const colorPickerRef = useRef(null)
-  const stickersRef = useRef(null)
-  const shapesRef = useRef(null)
-
-  // Close dropdowns on outside click
-  // Use 'pointerdown' so it fires before onClick and we can check containment properly
+  // FIX: Outside-click handler — use pointerdown but ONLY close if the click
+  // is truly outside the toolbar. The previous version fired on every click
+  // which killed the dropdowns immediately after they opened.
   useEffect(() => {
     const handle = (e) => {
-      if (colorPickerRef.current && !colorPickerRef.current.contains(e.target)) {
-        setShowColorPicker(false)
-      }
-      if (stickersRef.current && !stickersRef.current.contains(e.target)) {
+      if (toolbarRef.current && !toolbarRef.current.contains(e.target)) {
+        setShowStrokeColorPicker(false)
+        setShowFillColorPicker(false)
         setShowStickers(false)
-      }
-      if (shapesRef.current && !shapesRef.current.contains(e.target)) {
         setShowShapes(false)
       }
     }
@@ -398,6 +462,12 @@ function Room() {
 
   const startDraw = (pos, isBackground) => {
     if (resizingId.current) return
+    // FIX: pan tool — just record start pos, no drawing
+    if (tool === 'pan') {
+      isPanning.current = true
+      panStart.current = pos
+      return
+    }
     if (tool === 'text') {
       const sp = stageRef.current.getPointerPosition()
       setTextInput({ screenX: sp?.x || pos.x, screenY: sp?.y || pos.y, canvasX: pos.x, canvasY: pos.y })
@@ -419,8 +489,15 @@ function Room() {
     }
   }
 
-  const moveDraw = (pos) => {
+  const moveDraw = (pos, rawClientX, rawClientY) => {
     if (resizingId.current) return
+    // FIX: pan movement
+    if (tool === 'pan' && isPanning.current && panStart.current) {
+      const dx = pos.x - panStart.current.x
+      const dy = pos.y - panStart.current.y
+      setStagePos(prev => clampPos({ x: prev.x + dx * scale, y: prev.y + dy * scale }))
+      return
+    }
     if (!isDrawing.current) return
     if (tool === 'eraser') { eraseAt(pos, scale); return }
     if (tool === 'draw' && currentLine) {
@@ -441,6 +518,12 @@ function Room() {
 
   const endDraw = () => {
     if (resizingId.current) return
+    // FIX: end pan
+    if (tool === 'pan') {
+      isPanning.current = false
+      panStart.current = null
+      return
+    }
     if (!isDrawing.current) return
     isDrawing.current = false
     if (tool === 'draw' && currentLine) {
@@ -461,17 +544,33 @@ function Room() {
   }
 
   const handleMouseMove = (e) => {
-    // Stage-level hover: if pointer moves over background, clear hover
     const target = e.target
     const isBackground = target === target.getStage() || target.name?.() === 'background'
     if (isBackground && !isDrawing.current) setHoveredElementId(null)
-
     if (!resizingId.current) moveDraw(getPointerPosition())
   }
 
   const handleMouseUp = () => { if (!resizingId.current) endDraw() }
 
+  // FIX: Pinch-to-zoom — detect multi-touch and skip drawing
+  const getPinchDistance = (touches) => {
+    const dx = touches[0].clientX - touches[1].clientX
+    const dy = touches[0].clientY - touches[1].clientY
+    return Math.sqrt(dx * dx + dy * dy)
+  }
+
   const handleTouchStart = (e) => {
+    touchCount.current = e.evt.touches.length
+
+    // Two fingers = pinch zoom, skip drawing
+    if (e.evt.touches.length >= 2) {
+      isDrawing.current = false
+      isPanning.current = false
+      lastPinchDistance.current = getPinchDistance(e.evt.touches)
+      e.evt.preventDefault()
+      return
+    }
+
     if (resizingId.current) return
     const touch = e.evt.touches[0]
     if (!touch) return
@@ -481,15 +580,33 @@ function Room() {
     if (isBackground) setSelectedId(null)
     startDraw(pos, isBackground)
   }
+
   const handleTouchMove = (e) => {
+    // FIX: Handle pinch-to-zoom
+    if (e.evt.touches.length >= 2) {
+      e.evt.preventDefault()
+      const newDist = getPinchDistance(e.evt.touches)
+      if (lastPinchDistance.current) {
+        const ratio = newDist / lastPinchDistance.current
+        setScale(prev => Math.min(Math.max(prev * ratio, 0.2), 4))
+      }
+      lastPinchDistance.current = newDist
+      return
+    }
+
     if (resizingId.current) return
-    if (!isDrawing.current) return
+    if (!isDrawing.current && !isPanning.current) return
     e.evt.preventDefault()
     const touch = e.evt.touches[0]
     if (!touch) return
     moveDraw(getTouchPosition(touch))
   }
-  const handleTouchEnd = (e) => { if (!resizingId.current) { e.evt.preventDefault(); endDraw() } }
+
+  const handleTouchEnd = (e) => {
+    lastPinchDistance.current = null
+    touchCount.current = 0
+    if (!resizingId.current) { e.evt.preventDefault(); endDraw() }
+  }
 
   // ── Text ──────────────────────────────────────────────────────────────────
 
@@ -587,8 +704,17 @@ function Room() {
           {...(idx === 0 ? shadowProps : {})}
           draggable={isDraft && idx === 0}
           onDragEnd={isDraft && idx === 0 ? (e) => {
-            handleElementDragEnd(el.id, e.target.x(), e.target.y())
+            const dx = e.target.x()
+            const dy = e.target.y()
+            handleElementDragEnd(el.id, dx, dy)
             e.target.x(0); e.target.y(0)
+            // Persist updated shape position
+            const updated = {
+              ...el,
+              x: el.x + dx, y: el.y + dy,
+              x2: (el.x2 ?? el.x) + dx, y2: (el.y2 ?? el.y) + dy,
+            }
+            persistElement(updated)
           } : undefined}
         />
       )
@@ -689,8 +815,13 @@ function Room() {
           onMouseLeave={() => setHoveredElementId(null)}
           draggable={isDraft}
           onDragEnd={isDraft ? (e) => {
-            handleElementDragEnd(el.id, e.target.x(), e.target.y())
+            const dx = e.target.x()
+            const dy = e.target.y()
+            handleElementDragEnd(el.id, dx, dy)
             e.target.x(0); e.target.y(0)
+            // Persist updated position
+            const updated = { ...el, points: el.points.map((p, i) => i % 2 === 0 ? p + dx : p + dy) }
+            persistElement(updated)
           } : undefined}
           {...shadowProps}
         />,
@@ -699,7 +830,6 @@ function Room() {
     }
 
     if (el.type === 'text') {
-      // Approximate bounding box for resize handle placement
       const approxWidth = el.text.length * el.fontSize * 0.6
       const approxHeight = el.fontSize * 1.4
       return [
@@ -713,13 +843,17 @@ function Room() {
           onMouseLeave={() => setHoveredElementId(null)}
           draggable={isDraft}
           onDragEnd={isDraft ? (e) => {
-            handleElementDragEnd(el.id, e.target.x() - el.x, e.target.y() - el.y)
+            const dx = e.target.x() - el.x
+            const dy = e.target.y() - el.y
+            handleElementDragEnd(el.id, dx, dy)
             e.target.x(el.x); e.target.y(el.y)
+            // Persist updated position
+            const updated = { ...el, x: el.x + dx, y: el.y + dy }
+            persistElement(updated)
           } : undefined}
           {...shadowProps}
         />,
         tooltip,
-        // Resize handle for ALL text (regular text + stickers)
         isDraft ? renderResizeHandle(el, el.x + approxWidth, el.y + approxHeight) : null,
       ].filter(Boolean)
     }
@@ -733,7 +867,14 @@ function Room() {
           onMouseEnter={() => setHoveredElementId(el.id)}
           onMouseLeave={() => setHoveredElementId(null)}
           draggable={isDraft}
-          onDragEnd={isDraft ? (e) => handleImageDragEnd(el.id, e.target.x(), e.target.y()) : undefined}
+          onDragEnd={isDraft ? (e) => {
+            const newX = e.target.x()
+            const newY = e.target.y()
+            handleImageDragEnd(el.id, newX, newY)
+            // Persist updated position
+            const updated = { ...el, x: newX, y: newY }
+            persistElement(updated)
+          } : undefined}
           {...(isSelected ? { shadowColor: '#c8a040', shadowBlur: 16, shadowOpacity: 0.75 } : {})}
         />,
         tooltip,
@@ -757,7 +898,13 @@ function Room() {
           onMouseEnter={() => setHoveredElementId(el.id)}
           onMouseLeave={() => setHoveredElementId(null)}
           draggable={isDraft}
-          onDragEnd={isDraft ? (e) => handleImageDragEnd(el.id, e.target.x(), e.target.y()) : undefined}
+          onDragEnd={isDraft ? (e) => {
+            const newX = e.target.x()
+            const newY = e.target.y()
+            handleImageDragEnd(el.id, newX, newY)
+            const updated = { ...el, x: newX, y: newY }
+            persistElement(updated)
+          } : undefined}
         />,
         <Text key={`${el.id}-play`}
           x={el.x + 14} y={el.y + 13}
@@ -804,9 +951,30 @@ function Room() {
 
   const getCursor = () => {
     if (resizingId.current) return 'nwse-resize'
+    if (tool === 'pan') return isPanning.current ? 'grabbing' : 'grab'
     if (tool === 'eraser') return 'cell'
     if (tool === 'text') return 'text'
     return 'crosshair'
+  }
+
+  // ── Toolbar toggle helpers (stop propagation to prevent instant close) ─────
+  const toggleShapes = (e) => {
+    e.stopPropagation()
+    setShowShapes(p => !p)
+  }
+  const toggleStrokeColor = (e) => {
+    e.stopPropagation()
+    setShowStrokeColorPicker(p => !p)
+    setShowFillColorPicker(false)
+  }
+  const toggleFillColor = (e) => {
+    e.stopPropagation()
+    setShowFillColorPicker(p => !p)
+    setShowStrokeColorPicker(false)
+  }
+  const toggleStickers = (e) => {
+    e.stopPropagation()
+    setShowStickers(p => !p)
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -818,32 +986,52 @@ function Room() {
       tabIndex={0}
     >
       {/* ── Toolbar ── */}
-      <div ref={toolbarRef} style={{ position: 'fixed', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 100, maxWidth: '98vw' }}>
+      <div ref={toolbarRef} style={{
+        position: 'fixed', top: 12, left: '50%', transform: 'translateX(-50%)',
+        zIndex: 100,
+        // FIX: constrain width on mobile and allow wrapping
+        maxWidth: 'calc(100vw - 16px)',
+        width: 'max-content',
+      }}>
         <div style={{
           display: 'flex', gap: 3, background: '#fffcf8',
           borderRadius: 14, padding: '5px 8px', alignItems: 'center',
-          overflowX: 'auto', overflowY: 'visible',
+          // FIX: allow wrapping on small screens
+          flexWrap: 'wrap',
           boxShadow: '0 2px 16px rgba(44,36,16,0.10), 0 1px 4px rgba(44,36,16,0.06)',
-          border: '1px solid #e8ddd0', scrollbarWidth: 'none',
+          border: '1px solid #e8ddd0',
         }}>
+
+          {/* FIX: Pan/scroll tool — default "no drawing" mode */}
+          <TBtn active={tool === 'pan'} onClick={() => setTool('pan')} title="Pan / Scroll (no drawing)">
+            <SvgIcon name="pan" />
+          </TBtn>
 
           <TBtn active={tool === 'draw'} onClick={() => setTool('draw')} title="Draw">
             <SvgIcon name="pencil" />
           </TBtn>
 
-          {/* Shapes dropdown */}
-          <div ref={shapesRef} style={{ position: 'relative' }}>
-            <TBtn active={isShapeTool} onClick={() => setShowShapes(p => !p)} title="Shapes" style={{ gap: 4 }}>
+          {/* Shapes dropdown — FIX: use onPointerDown + stopPropagation */}
+          <div style={{ position: 'relative' }}>
+            <TBtn
+              active={isShapeTool}
+              title="Shapes"
+              style={{ gap: 4 }}
+              onPointerDown={toggleShapes}
+              onClick={(e) => e.stopPropagation()}
+            >
               <SvgIcon name={activeShape?.icon || 'rect'} />
               <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor"><path d="M0 2l4 4 4-4z"/></svg>
             </TBtn>
             {showShapes && (
-              <div style={{
-                position: 'absolute', top: 40, left: '50%', transform: 'translateX(-50%)',
-                background: '#fffcf8', borderRadius: 12, padding: 8,
-                boxShadow: '0 6px 24px rgba(44,36,16,0.12)', border: '1px solid #e8ddd0',
-                display: 'flex', gap: 4, zIndex: 200, whiteSpace: 'nowrap',
-              }}>
+              <div
+                onPointerDown={(e) => e.stopPropagation()}
+                style={{
+                  position: 'absolute', top: 40, left: '50%', transform: 'translateX(-50%)',
+                  background: '#fffcf8', borderRadius: 12, padding: 8,
+                  boxShadow: '0 6px 24px rgba(44,36,16,0.12)', border: '1px solid #e8ddd0',
+                  display: 'flex', gap: 4, zIndex: 200, whiteSpace: 'nowrap',
+                }}>
                 {shapeTools.map(s => (
                   <TBtn key={s.id} active={tool === s.id} title={s.label}
                     onClick={() => { setTool(s.id); setShowShapes(false) }}>
@@ -864,19 +1052,19 @@ function Room() {
 
           <Divider />
 
-          {/* Color pickers — wrapped together so one ref covers both */}
-          <div ref={colorPickerRef} style={{ display: 'flex', gap: 3, alignItems: 'center', flexShrink: 0 }}>
-            {/* Stroke color picker */}
+          {/* FIX: Color pickers — each has its own toggle, stopPropagation on open */}
+          <div style={{ display: 'flex', gap: 3, alignItems: 'center', flexShrink: 0 }}>
+            {/* Stroke color */}
             <div style={{ position: 'relative' }}>
               <div
-                onClick={() => { setColorPickerTarget('stroke'); setShowColorPicker(p => colorPickerTarget === 'stroke' ? !p : true) }}
+                onPointerDown={toggleStrokeColor}
                 title="Stroke color"
                 style={{
                   width: 26, height: 26, borderRadius: 7, cursor: 'pointer',
                   background: currentStrokeColor, border: '2px solid #e8ddd0', flexShrink: 0,
                 }}
               />
-              {showColorPicker && colorPickerTarget === 'stroke' && (
+              {showStrokeColorPicker && (
                 <ColorPickerDropdown
                   label="stroke"
                   color={currentStrokeColor}
@@ -891,11 +1079,11 @@ function Room() {
               )}
             </div>
 
-            {/* Fill color picker */}
+            {/* Fill color — only for rect/circle */}
             {isShapeTool && ['rect','circle'].includes(tool) && (
               <div style={{ position: 'relative' }}>
                 <div
-                  onClick={() => { setColorPickerTarget('fill'); setShowColorPicker(p => colorPickerTarget === 'fill' ? !p : true) }}
+                  onPointerDown={toggleFillColor}
                   title="Fill color"
                   style={{
                     width: 26, height: 26, borderRadius: 7, cursor: 'pointer',
@@ -905,7 +1093,7 @@ function Room() {
                       : fillColor,
                   }}
                 />
-                {showColorPicker && colorPickerTarget === 'fill' && (
+                {showFillColorPicker && (
                   <ColorPickerDropdown
                     label="fill"
                     color={fillColor}
@@ -941,13 +1129,21 @@ function Room() {
 
           <Divider />
 
-          <TBtn onClick={() => setScale(prev => Math.max(prev * 0.8, 0.2))} title="Zoom out">
+          <TBtn onClick={() => setScale(prev => {
+            const next = Math.max(prev * 0.8, 0.2)
+            setStagePos(p => clampPos(p, next))
+            return next
+          })} title="Zoom out">
             <SvgIcon name="minus" />
           </TBtn>
           <span style={{ fontSize: 10, color: '#b0a090', minWidth: 32, textAlign: 'center', fontWeight: 700, fontFamily: 'Nunito, sans-serif', flexShrink: 0 }}>
             {Math.round(scale * 100)}%
           </span>
-          <TBtn onClick={() => setScale(prev => Math.min(prev * 1.2, 4))} title="Zoom in">
+          <TBtn onClick={() => setScale(prev => {
+            const next = Math.min(prev * 1.2, 4)
+            setStagePos(p => clampPos(p, next))
+            return next
+          })} title="Zoom in">
             <SvgIcon name="plus" />
           </TBtn>
 
@@ -964,17 +1160,25 @@ function Room() {
             {isRecording && <span style={{ fontSize: 10, fontFamily: 'Nunito, sans-serif', fontWeight: 700 }}>{formatDuration(recordingSeconds)}</span>}
           </TBtn>
 
-          <div ref={stickersRef} style={{ position: 'relative' }}>
-            <TBtn active={showStickers} onClick={() => setShowStickers(p => !p)} title="Stickers">
+          {/* Stickers */}
+          <div style={{ position: 'relative' }}>
+            <TBtn
+              active={showStickers}
+              title="Stickers"
+              onPointerDown={toggleStickers}
+              onClick={(e) => e.stopPropagation()}
+            >
               <SvgIcon name="sticker" />
             </TBtn>
             {showStickers && (
-              <div style={{
-                position: 'absolute', top: 40, right: 0, background: '#fffcf8',
-                borderRadius: 12, padding: 8,
-                boxShadow: '0 6px 24px rgba(44,36,16,0.12)', border: '1px solid #e8ddd0',
-                display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 3, width: 140, zIndex: 200,
-              }}>
+              <div
+                onPointerDown={(e) => e.stopPropagation()}
+                style={{
+                  position: 'absolute', top: 40, right: 0, background: '#fffcf8',
+                  borderRadius: 12, padding: 8,
+                  boxShadow: '0 6px 24px rgba(44,36,16,0.12)', border: '1px solid #e8ddd0',
+                  display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 3, width: 140, zIndex: 200,
+                }}>
                 {stickers.map((emoji, idx) => (
                   <button key={idx} onClick={() => addSticker(emoji)}
                     style={{ fontSize: 20, border: 'none', background: '#f5f0e8', borderRadius: 7, cursor: 'pointer', padding: 5 }}>
@@ -1049,8 +1253,8 @@ function Room() {
         onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd}
       >
         <Layer>
-          <Rect name="background" x={0} y={0}
-            width={CANVAS_WIDTH / scale + 200} height={CANVAS_HEIGHT}
+          <Rect name="background" x={-VIRTUAL_W} y={0}
+            width={VIRTUAL_W * 3} height={VIRTUAL_H}
             fillPatternImage={dotGridCanvas}
           />
           {sentElements.map(el => renderElement(el, false)).flat().filter(Boolean)}

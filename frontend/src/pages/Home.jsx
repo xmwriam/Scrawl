@@ -1,4 +1,5 @@
-import { useContext, useState, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
+import { useContext } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { AuthContext } from '../context/AuthContext'
 import Room from './Room'
@@ -39,15 +40,22 @@ function Home() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768)
 
+  // FIX: Track previous roomId so we only close on navigation, not on first load
+  const prevRoomId = useRef(roomId)
+
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 768)
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
   }, [])
 
-  // Close sidebar when navigating to a room on mobile
+  // FIX: Only close sidebar when roomId actually changes (user tapped a conversation)
+  // not on first mount, so the sidebar stays put until user navigates.
   useEffect(() => {
-    if (isMobile && roomId) setSidebarOpen(false)
+    if (isMobile && roomId && roomId !== prevRoomId.current) {
+      setSidebarOpen(false)
+    }
+    prevRoomId.current = roomId
   }, [roomId, isMobile])
 
   useEffect(() => {
@@ -186,16 +194,20 @@ function Home() {
       fontFamily: 'Lora, Georgia, serif',
       background: '#faf6f0',
       position: 'relative',
+      // FIX: prevent any overflow from the sidebar slide animation causing a horizontal scrollbar
+      overflow: 'hidden',
     }}>
 
-      {/* ── Mobile overlay ── */}
+      {/* ── Mobile overlay — clicking it closes the sidebar ── */}
       {isMobile && sidebarOpen && (
         <div
           onClick={() => setSidebarOpen(false)}
           style={{
             position: 'fixed', inset: 0,
-            background: 'rgba(44,36,16,0.3)',
+            background: 'rgba(44,36,16,0.35)',
             zIndex: 40,
+            // FIX: use pointer events so the overlay intercepts all taps
+            touchAction: 'none',
           }}
         />
       )}
@@ -203,7 +215,11 @@ function Home() {
       {/* ── Mobile hamburger ── */}
       {isMobile && (
         <button
-          onClick={() => setSidebarOpen(!sidebarOpen)}
+          // FIX: use onPointerDown so it fires before the overlay pointerdown
+          onPointerDown={(e) => {
+            e.stopPropagation()
+            setSidebarOpen(p => !p)
+          }}
           style={{
             position: 'fixed', top: 12, left: 12, zIndex: 60,
             width: 38, height: 38, borderRadius: 10,
@@ -218,20 +234,24 @@ function Home() {
       )}
 
       {/* ── Sidebar ── */}
-      <div style={{
-        width: isMobile ? '80vw' : 280,
-        minWidth: isMobile ? 'unset' : 280,
-        height: '100vh',
-        background: '#fffcf8',
-        borderRight: '1px solid #e8ddd0',
-        display: 'flex',
-        flexDirection: 'column',
-        position: isMobile ? 'fixed' : 'relative',
-        left: 0, top: 0, zIndex: 50,
-        transform: isMobile && !sidebarOpen ? 'translateX(-100%)' : 'translateX(0)',
-        transition: 'transform 0.3s ease',
-        boxShadow: isMobile && sidebarOpen ? '4px 0 24px rgba(44,36,16,0.15)' : 'none',
-      }}>
+      <div
+        // FIX: stop taps inside sidebar from bubbling to the overlay
+        onPointerDown={(e) => isMobile && e.stopPropagation()}
+        style={{
+          width: isMobile ? Math.min(300, window.innerWidth * 0.82) : 280,
+          minWidth: isMobile ? 'unset' : 280,
+          height: '100vh',
+          background: '#fffcf8',
+          borderRight: '1px solid #e8ddd0',
+          display: 'flex',
+          flexDirection: 'column',
+          position: isMobile ? 'fixed' : 'relative',
+          left: 0, top: 0, zIndex: 50,
+          transform: isMobile && !sidebarOpen ? 'translateX(-100%)' : 'translateX(0)',
+          transition: 'transform 0.25s cubic-bezier(0.4,0,0.2,1)',
+          boxShadow: isMobile && sidebarOpen ? '4px 0 32px rgba(44,36,16,0.18)' : 'none',
+          willChange: 'transform',
+        }}>
 
         {/* Header */}
         <div style={{
@@ -239,6 +259,8 @@ function Home() {
           borderBottom: '1px solid #e8ddd0',
           background: '#fffcf8',
           position: 'relative',
+          // FIX: leave space for hamburger button on mobile
+          paddingLeft: isMobile ? 56 : 20,
         }}>
           {[0,1,2].map(i => (
             <div key={i} style={{
@@ -535,7 +557,6 @@ function Home() {
         flex: 1,
         height: '100vh',
         overflow: 'hidden',
-        marginLeft: isMobile ? 0 : 0,
       }}>
         {roomId ? (
           <Room key={roomId} />
