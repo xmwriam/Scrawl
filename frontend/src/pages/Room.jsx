@@ -812,10 +812,13 @@ function Room({ onOpenSidebar, sidebarOpen: sidebarIsOpen }) {
       : (isHovered ? { shadowColor: '#8b5e3c', shadowBlur: 8, shadowOpacity: 0.3 } : {})
 
     const tooltipText = (isHovered || isSelected) ? getTooltipText(el) : ''
+    // For drawings, anchor the tooltip to the first point of the path
+    const tooltipX = el.x ?? (el.points?.[0] ?? 0)
+    const tooltipY = el.y ?? (el.points?.[1] ?? 0)
     const tooltip = tooltipText ? (
       <Text key={`tt-${el.id}`}
-        x={(el.x || 0)}
-        y={(el.y || 0) - 22}
+        x={tooltipX}
+        y={tooltipY - 22}
         text={tooltipText} fontSize={11}
         fill={isSelected ? '#8b5e3c' : '#b0a090'}
         fontFamily="Nunito, sans-serif" listening={false}
