@@ -10,11 +10,14 @@ import { HexColorPicker } from 'react-colorful'
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'
 // Virtual canvas is much larger than the viewport so the dot grid never runs out.
 // The background Rect is drawn in canvas-space, so it must be big enough that
-// even when zoomed out (scale=0.2) the visible area is always covered.
+// even when zoomed in (scale=4.0) the virtual canvas is large enough.
 const VIRTUAL_W = 8000   // wider than any likely content
 const VIRTUAL_H = 40000  // tall enough for long scrolling
 // Desktop canvas is locked to screen width (no horizontal scroll).
 // On mobile, users can pan horizontally up to VIRTUAL_W.
+// Left/right margin in canvas-space pixels — content can't be drawn or scrolled
+// closer than this to either edge. Gives breathing room on all screen sizes.
+const CANVAS_MARGIN = 48
 const FIXED_OPACITY = 0.72
 const HANDLE_RADIUS = 7
 
@@ -145,14 +148,25 @@ const ColorPickerDropdown = ({ label, color, onChange, swatches, showTransparent
 
 // ── Main Component ────────────────────────────────────────────────────────────
 
-function Room() {
+function Room({ onOpenSidebar, sidebarOpen: sidebarIsOpen }) {
   const { roomId } = useParams()
   const navigate = useNavigate()
   const { token, user } = useContext(AuthContext)
 
-  const [stagePos, setStagePos] = useState({ x: 0, y: 0 })
+  const [stagePos, setStagePos] = useState({ x: CANVAS_MARGIN, y: 0 })
   const [scale, setScale] = useState(1)
-  const [isMobile] = useState(() => window.innerWidth < 768)
+  // Track live window width so narrowed browser tabs get horizontal scroll
+  const [windowWidth, setWindowWidth] = useState(window.innerWidth)
+  useEffect(() => {
+    const onResize = () => setWindowWidth(window.innerWidth)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+  // Canvas "native" width — the width at which no horizontal scroll is needed.
+  // We fix this to the initial window width at mount time (the "full" size).
+  const nativeWidth = useRef(window.innerWidth)
+  // Allow horizontal scroll whenever the viewport is narrower than native width.
+  const needsHScroll = windowWidth < nativeWidth.current
   const [loadedImages, setLoadedImages] = useState({})
   const [textInput, setTextInput] = useState(null)
   // FIX: separate state for each picker so they can independently open/close
@@ -215,24 +229,30 @@ function Room() {
   const activeShape = shapeTools.find(s => s.id === tool)
 
   // ── Canvas bounds ─────────────────────────────────────────────────────────
-  // Desktop: no horizontal scroll (x is always 0).
-  // Mobile: horizontal scroll allowed, but clamped so the canvas edge never
-  //         goes past the viewport (left) or pulls too far right.
+  // If viewport is at native width: x locked to 0 (no horizontal scroll needed).
+  // If viewport is narrower (tab resized, mobile): allow horizontal scroll so
+  // users can pan to content that's off the right edge.
   const clampPos = useCallback((pos, sc = scale) => {
     const vw = window.innerWidth
     const vh = window.innerHeight
-    // Vertical: never scroll above top (y <= 0), never past virtual bottom
     const minY = -(VIRTUAL_H * sc - vh)
     const clampedY = Math.min(0, Math.max(minY, pos.y))
-    if (!isMobile) {
-      // Desktop: lock x to 0
-      return { x: 0, y: clampedY }
+    if (!needsHScroll) {
+      return { x: CANVAS_MARGIN, y: clampedY }
     }
-    // Mobile: allow horizontal scroll, but clamp so you can't scroll past VIRTUAL_W
-    const minX = -(VIRTUAL_W * sc - vw)
-    const clampedX = Math.min(0, Math.max(minX, pos.x))
+    // Narrowed viewport horizontal clamping:
+    // stagePos.x is the screen-pixel offset of canvas origin.
+    // maxX = CANVAS_MARGIN: leftmost position (left margin always visible).
+    // minX: scroll just enough to reveal the right edge of native-width content,
+    //       keeping CANVAS_MARGIN of breathing room on the right.
+    //   screen position of right edge = stagePos.x + nativeWidth.current
+    //   we want that to be >= vw - CANVAS_MARGIN
+    //   => stagePos.x >= vw - nativeWidth.current - CANVAS_MARGIN
+    const maxX = CANVAS_MARGIN
+    const minX = vw - nativeWidth.current - CANVAS_MARGIN
+    const clampedX = Math.min(maxX, Math.max(minX, pos.x))
     return { x: clampedX, y: clampedY }
-  }, [scale, isMobile])
+  }, [scale, needsHScroll])
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -382,7 +402,7 @@ function Room() {
       e.preventDefault()
       if (e.ctrlKey || e.metaKey) {
         setScale(prev => {
-          const next = Math.min(Math.max(prev * (e.deltaY > 0 ? 0.9 : 1.1), 0.2), 4)
+          const next = Math.min(Math.max(prev * (e.deltaY > 0 ? 0.92 : 1.08), 1.0), 4.0)
           // Re-clamp position at new scale
           setStagePos(p => clampPos(p, next))
           return next
@@ -493,9 +513,11 @@ function Room() {
     if (resizingId.current) return
     // FIX: pan movement
     if (tool === 'pan' && isPanning.current && panStart.current) {
-      const dx = pos.x - panStart.current.x
-      const dy = pos.y - panStart.current.y
-      setStagePos(prev => clampPos({ x: prev.x + dx * scale, y: prev.y + dy * scale }))
+      // pos is in canvas-space (already divided by scale), so multiply back to
+      // get screen-pixel delta, then apply directly to stagePos (also screen pixels).
+      const dx = (pos.x - panStart.current.x) * scale
+      const dy = (pos.y - panStart.current.y) * scale
+      setStagePos(prev => clampPos({ x: prev.x + dx, y: prev.y + dy }))
       return
     }
     if (!isDrawing.current) return
@@ -588,7 +610,7 @@ function Room() {
       const newDist = getPinchDistance(e.evt.touches)
       if (lastPinchDistance.current) {
         const ratio = newDist / lastPinchDistance.current
-        setScale(prev => Math.min(Math.max(prev * ratio, 0.2), 4))
+        setScale(prev => Math.min(Math.max(prev * ratio, 1.0), 4.0))
       }
       lastPinchDistance.current = newDist
       return
@@ -1002,7 +1024,24 @@ function Room() {
           border: '1px solid #e8ddd0',
         }}>
 
-          {/* FIX: Pan/scroll tool — default "no drawing" mode */}
+          {/* Sidebar toggle — always visible in toolbar */}
+          {onOpenSidebar && (
+            <TBtn
+              active={sidebarIsOpen}
+              onClick={onOpenSidebar}
+              title={sidebarIsOpen ? 'Sidebar open' : 'Open journals'}
+              style={{ marginRight: 2 }}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2"/>
+                <line x1="9" y1="3" x2="9" y2="21"/>
+              </svg>
+            </TBtn>
+          )}
+
+          <Divider />
+
+          {/* Pan/scroll tool — no drawing mode */}
           <TBtn active={tool === 'pan'} onClick={() => setTool('pan')} title="Pan / Scroll (no drawing)">
             <SvgIcon name="pan" />
           </TBtn>
@@ -1130,7 +1169,7 @@ function Room() {
           <Divider />
 
           <TBtn onClick={() => setScale(prev => {
-            const next = Math.max(prev * 0.8, 0.2)
+            const next = Math.max(prev * 0.85, 1.0)
             setStagePos(p => clampPos(p, next))
             return next
           })} title="Zoom out">
@@ -1140,7 +1179,7 @@ function Room() {
             {Math.round(scale * 100)}%
           </span>
           <TBtn onClick={() => setScale(prev => {
-            const next = Math.min(prev * 1.2, 4)
+            const next = Math.min(prev * 1.15, 4.0)
             setStagePos(p => clampPos(p, next))
             return next
           })} title="Zoom in">

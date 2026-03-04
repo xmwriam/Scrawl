@@ -1,10 +1,18 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useContext } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { AuthContext } from '../context/AuthContext'
 import Room from './Room'
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'
+
+// A clean sidebar/panel icon (three stacked lines with a left bar)
+const SidebarIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6b5040" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="3" width="18" height="18" rx="2"/>
+    <line x1="9" y1="3" x2="9" y2="21"/>
+  </svg>
+)
 
 const AVATAR_COLORS = [
   '#8b5e3c', '#6b7c4a', '#4a6b7c', '#7c4a6b',
@@ -37,26 +45,13 @@ function Home() {
   const [groupMembers, setGroupMembers] = useState([])
   const [searchingGroupMember, setSearchingGroupMember] = useState(false)
   const [creatingGroup, setCreatingGroup] = useState(false)
-  const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 768)
+  // Sidebar is always docked — toggleable open/closed
+  const [sidebarOpen, setSidebarOpen] = useState(true)
 
-  // FIX: Track previous roomId so we only close on navigation, not on first load
   const prevRoomId = useRef(roomId)
-
   useEffect(() => {
-    const handleResize = () => setIsMobile(window.innerWidth < 768)
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
-  }, [])
-
-  // FIX: Only close sidebar when roomId actually changes (user tapped a conversation)
-  // not on first mount, so the sidebar stays put until user navigates.
-  useEffect(() => {
-    if (isMobile && roomId && roomId !== prevRoomId.current) {
-      setSidebarOpen(false)
-    }
     prevRoomId.current = roomId
-  }, [roomId, isMobile])
+  }, [roomId])
 
   useEffect(() => {
     if (!token) return
@@ -194,73 +189,33 @@ function Home() {
       fontFamily: 'Lora, Georgia, serif',
       background: '#faf6f0',
       position: 'relative',
-      // FIX: prevent any overflow from the sidebar slide animation causing a horizontal scrollbar
       overflow: 'hidden',
     }}>
 
-      {/* ── Mobile overlay — clicking it closes the sidebar ── */}
-      {isMobile && sidebarOpen && (
-        <div
-          onClick={() => setSidebarOpen(false)}
-          style={{
-            position: 'fixed', inset: 0,
-            background: 'rgba(44,36,16,0.35)',
-            zIndex: 40,
-            // FIX: use pointer events so the overlay intercepts all taps
-            touchAction: 'none',
-          }}
-        />
-      )}
-
-      {/* ── Mobile hamburger ── */}
-      {isMobile && (
-        <button
-          // FIX: use onPointerDown so it fires before the overlay pointerdown
-          onPointerDown={(e) => {
-            e.stopPropagation()
-            setSidebarOpen(p => !p)
-          }}
-          style={{
-            position: 'fixed', top: 12, left: 12, zIndex: 60,
-            width: 38, height: 38, borderRadius: 10,
-            border: '1px solid #e8ddd0', background: '#fffcf8',
-            cursor: 'pointer', fontSize: 16,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            boxShadow: '0 2px 8px rgba(44,36,16,0.08)',
-          }}
-        >
-          {sidebarOpen ? '✕' : '☰'}
-        </button>
-      )}
-
-      {/* ── Sidebar ── */}
+      {/* ── Sidebar — docked, toggleable ── */}
       <div
-        // FIX: stop taps inside sidebar from bubbling to the overlay
-        onPointerDown={(e) => isMobile && e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
         style={{
-          width: isMobile ? Math.min(300, window.innerWidth * 0.82) : 280,
-          minWidth: isMobile ? 'unset' : 280,
+          width: sidebarOpen ? 280 : 0,
+          minWidth: sidebarOpen ? 280 : 0,
           height: '100vh',
           background: '#fffcf8',
-          borderRight: '1px solid #e8ddd0',
+          borderRight: sidebarOpen ? '1px solid #e8ddd0' : 'none',
           display: 'flex',
           flexDirection: 'column',
-          position: isMobile ? 'fixed' : 'relative',
-          left: 0, top: 0, zIndex: 50,
-          transform: isMobile && !sidebarOpen ? 'translateX(-100%)' : 'translateX(0)',
-          transition: 'transform 0.25s cubic-bezier(0.4,0,0.2,1)',
-          boxShadow: isMobile && sidebarOpen ? '4px 0 32px rgba(44,36,16,0.18)' : 'none',
-          willChange: 'transform',
+          position: 'relative',
+          transition: 'width 0.25s cubic-bezier(0.4,0,0.2,1), min-width 0.25s cubic-bezier(0.4,0,0.2,1)',
+          willChange: 'width',
+          overflow: 'hidden',
+          flexShrink: 0,
         }}>
 
         {/* Header */}
         <div style={{
-          padding: '22px 20px 18px',
+          padding: '20px 20px 16px',
           borderBottom: '1px solid #e8ddd0',
           background: '#fffcf8',
           position: 'relative',
-          // FIX: leave space for hamburger button on mobile
-          paddingLeft: isMobile ? 56 : 20,
         }}>
           {[0,1,2].map(i => (
             <div key={i} style={{
@@ -279,16 +234,16 @@ function Home() {
               scrawl
             </h1>
             <button
-              onClick={logout}
-              style={{
-                padding: '4px 10px', fontSize: 11, borderRadius: 6,
-                border: '1px solid #e0d5c5', background: 'transparent',
-                color: '#b0a090', cursor: 'pointer',
-                fontFamily: 'Nunito, sans-serif', fontWeight: 700,
-              }}
-            >
-              logout
-            </button>
+                onClick={logout}
+                style={{
+                  padding: '4px 10px', fontSize: 11, borderRadius: 6,
+                  border: '1px solid #e0d5c5', background: 'transparent',
+                  color: '#b0a090', cursor: 'pointer',
+                  fontFamily: 'Nunito, sans-serif', fontWeight: 700,
+                }}
+              >
+                logout
+              </button>
           </div>
           {user && (
             <p style={{
@@ -503,7 +458,7 @@ function Home() {
               return (
                 <div
                   key={room.id}
-                  onClick={() => navigate(`/room/${room.id}`)}
+                  onClick={() => { navigate(`/room/${room.id}`); setSidebarOpen(false) }}
                   style={{
                     padding: '13px 18px', cursor: 'pointer',
                     borderBottom: '1px solid #f0e8dc',
@@ -552,20 +507,30 @@ function Home() {
         </div>
       </div>
 
-      {/* ── Main area ── */}
-      <div style={{
-        flex: 1,
-        height: '100vh',
-        overflow: 'hidden',
-      }}>
+      {/* ── Canvas area — flex:1, shrinks/grows as sidebar opens/closes ── */}
+      <div style={{ flex: 1, minWidth: 0, height: '100vh', overflow: 'hidden' }}>
         {roomId ? (
-          <Room key={roomId} />
+          <Room key={roomId} onOpenSidebar={() => setSidebarOpen(p => !p)} sidebarOpen={sidebarOpen} />
         ) : (
           <div style={{
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             height: '100%', background: '#faf6f0',
             position: 'relative', overflow: 'hidden',
           }}>
+            {/* Persistent sidebar toggle even on the empty state */}
+            <button
+              onPointerDown={(e) => { e.stopPropagation(); setSidebarOpen(p => !p) }}
+              style={{
+                position: 'absolute', top: 12, left: 12,
+                width: 36, height: 36, borderRadius: 10,
+                border: '1px solid #e8ddd0', background: '#fffcf8',
+                cursor: 'pointer', zIndex: 10,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                boxShadow: '0 2px 8px rgba(44,36,16,0.08)',
+              }}
+            >
+              <SidebarIcon />
+            </button>
             <div style={{
               position: 'absolute', inset: 0,
               backgroundImage: 'radial-gradient(circle, #c8b89a 1px, transparent 1px)',
@@ -573,11 +538,6 @@ function Home() {
               opacity: 0.4,
             }} />
             <div style={{ textAlign: 'center', position: 'relative' }}>
-              {isMobile && (
-                <p style={{ fontSize: 12, color: '#b0a090', marginBottom: 16, fontFamily: 'Nunito, sans-serif', fontWeight: 600 }}>
-                  tap ☰ to open your journals
-                </p>
-              )}
               <div style={{ fontSize: 52, marginBottom: 16, opacity: 0.3 }}>✒</div>
               <h2 style={{
                 fontSize: 22, fontWeight: 700, color: '#6b5040',
