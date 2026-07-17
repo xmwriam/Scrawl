@@ -91,9 +91,16 @@ function Home() {
           { headers: { Authorization: `Bearer ${token}` } }
         )
         const data = await res.json()
-        setSearchResults(Array.isArray(data) ? data : [])
-      } catch { setSearchResults([]) }
-      finally { setSearching(false) }
+        if (!res.ok) {
+          console.error('User search failed:', data)
+          setSearchResults([])
+        } else {
+          setSearchResults(Array.isArray(data) ? data : [])
+        }
+      } catch (err) {
+        console.error('User search error:', err)
+        setSearchResults([])
+      } finally { setSearching(false) }
     }, 300)
     return () => clearTimeout(t)
   }, [searchQuery, token])

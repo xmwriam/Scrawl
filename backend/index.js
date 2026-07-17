@@ -28,15 +28,25 @@ const io = new Server(server, {
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY)
 const supabaseAdmin = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY)
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID)
+const JWT_SECRET = process.env.JWT_SECRET || 'development_jwt_secret'
+if (!process.env.JWT_SECRET) {
+  console.warn('WARNING: JWT_SECRET is not set. Using a development fallback secret. Set JWT_SECRET in backend/.env for production.');
+}
 const SALT_ROUNDS = 10
 const rooms = {}
 
 // ─── Upload ───────────────────────────────────────────────────────────────────
 
+const sanitizeFilename = (name) => name
+  .replace(/[^a-zA-Z0-9._-]/g, '_')
+  .replace(/_+/g, '_')
+  .replace(/^[-_.]+|[-_.]+$/g, '')
+
 app.post('/upload', upload.single('file'), async (req, res) => {
   try {
     const file = req.file
-    const fileName = `${Date.now()}-${file.originalname}`
+    if (!file) return res.status(400).json({ error: 'File required' })
+    const fileName = `${Date.now()}-${sanitizeFilename(file.originalname)}`
     const { error } = await supabaseAdmin.storage
       .from('images')
       .upload(fileName, file.buffer, { contentType: file.mimetype })
@@ -52,7 +62,8 @@ app.post('/upload', upload.single('file'), async (req, res) => {
 app.post('/upload-audio', upload.single('file'), async (req, res) => {
   try {
     const file = req.file
-    const fileName = `${Date.now()}-${file.originalname}`
+    if (!file) return res.status(400).json({ error: 'File required' })
+    const fileName = `${Date.now()}-${sanitizeFilename(file.originalname)}`
     const { error } = await supabaseAdmin.storage
       .from('audio')
       .upload(fileName, file.buffer, { contentType: file.mimetype })
@@ -73,18 +84,18 @@ app.post('/auth/signup', async (req, res) => {
     if (!email || !password || !username)
       return res.status(400).json({ error: 'Email, password and username required' })
 
-    const { data: existingUsername } = await supabase
+    const { data: existingUsername } = await supabaseAdmin
       .from('users').select('id').eq('username', username).single()
     if (existingUsername)
       return res.status(400).json({ error: 'Username already taken' })
 
-    const { data: existingEmail } = await supabase
+    const { data: existingEmail } = await supabaseAdmin
       .from('users').select('id').eq('email', email).single()
     if (existingEmail)
       return res.status(400).json({ error: 'Email already registered' })
 
     const passwordHash = await bcrypt.hash(password, SALT_ROUNDS)
-    const { data: user, error } = await supabase
+    const { data: user, error } = await supabaseAdmin
       .from('users')
       .insert({ email, password_hash: passwordHash, username })
       .select().single()
@@ -107,9 +118,13 @@ app.post('/auth/login', async (req, res) => {
     if (!username || !password)
       return res.status(400).json({ error: 'Username and password required' })
 
-    const { data: user, error } = await supabase
+    const { data: user, error } = await supabaseAdmin
       .from('users').select('*').eq('username', username.toLowerCase()).single()
-    if (error || !user)
+    if (error) {
+      console.error('Login query error:', error)
+      return res.status(401).json({ error: 'Invalid username or password' })
+    }
+    if (!user)
       return res.status(401).json({ error: 'Invalid username or password' })
 
     const isValid = await bcrypt.compare(password, user.password_hash)
@@ -139,7 +154,7 @@ app.post('/auth/google-login', async (req, res) => {
     const email = payload.email
     if (!email) return res.status(400).json({ error: 'Email not provided by Google' })
 
-    let { data: user, error } = await supabase
+    let { data: user, error } = await supabaseAdmin
       .from('users').select('*').eq('email', email).single()
 
     if (error && error.code === 'PGRST116') {
@@ -147,12 +162,12 @@ app.post('/auth/google-login', async (req, res) => {
       let username = baseUsername
       let suffix = 1
       while (true) {
-        const { data: taken } = await supabase
+        const { data: taken } = await supabaseAdmin
           .from('users').select('id').eq('username', username).single()
         if (!taken) break
         username = `${baseUsername}${suffix++}`
       }
-      const { data: newUser, error: insertError } = await supabase
+      const { data: newUser, error: insertError } = await supabaseAdmin
         .from('users')
         .insert({ email, password_hash: 'google_oauth', username })
         .select().single()
@@ -193,7 +208,7 @@ app.get('/users/search', verifyToken, async (req, res) => {
   try {
     const { username } = req.query
     if (!username) return res.status(400).json({ error: 'Username required' })
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('users')
       .select('id, email, username')
       .ilike('username', `%${username}%`)
@@ -254,7 +269,7 @@ app.patch('/elements/:elementId', verifyToken, async (req, res) => {
 app.get('/rooms/mine', verifyToken, async (req, res) => {
   try {
     const userId = req.user.userId
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from('room_members')
       .select(`room_id, rooms(id, room_code, created_at, owner_id, room_type, room_name, group_id)`)
       .eq('user_id', userId)
@@ -278,17 +293,17 @@ app.post('/rooms/create-with-user', verifyToken, async (req, res) => {
     if (!targetUserId) return res.status(400).json({ error: 'Target user required' })
     if (targetUserId === userId) return res.status(400).json({ error: "Can't start a journal with yourself" })
 
-    const { data: myRooms } = await supabase
+    const { data: myRooms } = await supabaseAdmin
       .from('room_members').select('room_id').eq('user_id', userId)
 
     if (myRooms && myRooms.length > 0) {
       const myRoomIds = myRooms.map(r => r.room_id)
-      const { data: shared } = await supabase
+      const { data: shared } = await supabaseAdmin
         .from('room_members').select('room_id')
         .eq('user_id', targetUserId).in('room_id', myRoomIds)
 
       if (shared && shared.length > 0) {
-        const { data: existingRoom } = await supabase
+        const { data: existingRoom } = await supabaseAdmin
           .from('rooms').select('*')
           .eq('id', shared[0].room_id)
           .eq('room_type', 'direct')
@@ -308,16 +323,17 @@ app.post('/rooms/create-with-user', verifyToken, async (req, res) => {
       roomExists = !!data
     }
 
-    const { data: room, error } = await supabase
+    const { data: room, error } = await supabaseAdmin
       .from('rooms')
       .insert({ room_code: roomCode, owner_id: userId, room_type: 'direct' })
       .select().single()
     if (error) throw error
 
-    await supabase.from('room_members').insert([
+    const { error: membersError } = await supabaseAdmin.from('room_members').insert([
       { room_id: room.id, user_id: userId },
       { room_id: room.id, user_id: targetUserId },
     ])
+    if (membersError) throw membersError
 
     res.json({ roomId: room.id, roomCode: room.room_code })
   } catch (err) {
@@ -330,7 +346,7 @@ app.get('/rooms/:roomId/partner', verifyToken, async (req, res) => {
   try {
     const { roomId } = req.params
     const userId = req.user.userId
-    const { data: members, error } = await supabase
+    const { data: members, error } = await supabaseAdmin
       .from('room_members')
       .select('user_id, users(id, username, email)')
       .eq('room_id', roomId)
@@ -345,7 +361,7 @@ app.get('/rooms/:roomId/partner', verifyToken, async (req, res) => {
 app.get('/rooms/:roomId/members', verifyToken, async (req, res) => {
   try {
     const { roomId } = req.params
-    const { data: members, error } = await supabase
+    const { data: members, error } = await supabaseAdmin
       .from('room_members')
       .select('user_id, users(id, username, email)')
       .eq('room_id', roomId)
@@ -368,13 +384,13 @@ app.post('/groups/create', verifyToken, async (req, res) => {
     if (!memberUsernames || memberUsernames.length === 0)
       return res.status(400).json({ error: 'Add at least one member' })
 
-    const { data: group, error: groupError } = await supabase
+    const { data: group, error: groupError } = await supabaseAdmin
       .from('groups')
       .insert({ name: name.trim(), created_by: userId })
       .select().single()
     if (groupError) throw groupError
 
-    const { data: memberUsers, error: usersError } = await supabase
+    const { data: memberUsers, error: usersError } = await supabaseAdmin
       .from('users')
       .select('id, username')
       .in('username', memberUsernames)
@@ -390,12 +406,12 @@ app.post('/groups/create', verifyToken, async (req, res) => {
     let roomExists = true
     while (roomExists) {
       roomCode = Math.random().toString(36).substring(2, 8).toUpperCase()
-      const { data } = await supabase
+      const { data } = await supabaseAdmin
         .from('rooms').select('id').eq('room_code', roomCode).single()
       roomExists = !!data
     }
 
-    const { data: room, error: roomError } = await supabase
+    const { data: room, error: roomError } = await supabaseAdmin
       .from('rooms')
       .insert({
         room_code: roomCode,
@@ -410,12 +426,15 @@ app.post('/groups/create', verifyToken, async (req, res) => {
     const allUserIds = [userId, ...memberUsers.map(u => u.id)]
     const uniqueUserIds = [...new Set(allUserIds)]
 
-    await supabase.from('room_members').insert(
+    const { error: roomMembersError } = await supabaseAdmin.from('room_members').insert(
       uniqueUserIds.map(uid => ({ room_id: room.id, user_id: uid }))
     )
-    await supabase.from('group_members').insert(
+    if (roomMembersError) throw roomMembersError
+
+    const { error: groupMembersError } = await supabaseAdmin.from('group_members').insert(
       uniqueUserIds.map(uid => ({ group_id: group.id, user_id: uid }))
     )
+    if (groupMembersError) throw groupMembersError
 
     res.json({ roomId: room.id, roomCode: room.room_code, groupId: group.id, name: group.name })
   } catch (err) {
@@ -486,7 +505,7 @@ io.on('connection', (socket) => {
         socket.emit('auth-error', 'Invalid token'); return
       }
 
-      const { data: membership, error: memberError } = await supabase
+      const { data: membership, error: memberError } = await supabaseAdmin
         .from('room_members').select('*')
         .eq('room_id', roomId).eq('user_id', userId).single()
       if (memberError || !membership) {
@@ -503,7 +522,7 @@ io.on('connection', (socket) => {
       socket.data.roomId = roomId
       socket.data.userId = userId
 
-      const { data, error } = await supabase
+      const { data, error } = await supabaseAdmin
         .from('elements').select('*')
         .eq('room_id', roomId).eq('sent', true)
         .order('created_at', { ascending: true })
