@@ -208,6 +208,15 @@ const verifyToken = (req, res, next) => {
   }
 }
 
+// Basic root and health endpoints so the deployed service URL shows a friendly response
+app.get('/', (req, res) => {
+  res.send('Scrawl backend is running')
+})
+
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', uptime: process.uptime() })
+})
+
 // ─── Users ────────────────────────────────────────────────────────────────────
 
 app.get('/users/search', verifyToken, async (req, res) => {
