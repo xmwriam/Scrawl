@@ -6,7 +6,7 @@ import Home from './pages/Home'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
 
-const GOOGLE_CLIENT_ID = '241825963101-7u0qdkqaggmjl9ppo50dj31l784v2lth.apps.googleusercontent.com'
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '241825963101-7u0qdkqaggmjl9ppo50dj31l784v2lth.apps.googleusercontent.com'
 
 function App() {
   return (

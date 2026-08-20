@@ -10,8 +10,14 @@ const { OAuth2Client } = require('google-auth-library')
 const { createClient } = require('@supabase/supabase-js')
 
 const app = express()
+const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:5173')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean)
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173'
+  origin: allowedOrigins,
+  credentials: true,
 }))
 app.use(express.json())
 
@@ -20,7 +26,7 @@ const server = http.createServer(app)
 
 const io = new Server(server, {
   cors: {
-    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+    origin: allowedOrigins,
     methods: ['GET', 'POST']
   }
 })
@@ -563,4 +569,5 @@ io.on('connection', (socket) => {
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
-server.listen(3001, () => console.log('Scrawl server running on http://localhost:3001'))
+const PORT = process.env.PORT || 3001
+server.listen(PORT, () => console.log(`Scrawl server running on port ${PORT}`))
