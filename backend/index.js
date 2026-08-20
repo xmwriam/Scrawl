@@ -579,4 +579,7 @@ io.on('connection', (socket) => {
 // ─── Start ────────────────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3001
-server.listen(PORT, () => console.log(`Scrawl server running on port ${PORT}`))
+server.listen(PORT, () => {
+  console.log(`Scrawl server running on port ${PORT}`)
+  console.log('READY: Scrawl backend root & health endpoints')
+})
